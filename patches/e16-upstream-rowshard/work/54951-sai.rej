@@ -1,0 +1,33 @@
+--- vllm/model_executor/layers/sparse_attn_indexer.py
++++ vllm/model_executor/layers/sparse_attn_indexer.py
+@@ -619,6 +708,15 @@ def sparse_attn_indexer(
+                     chunk.local_cu_seq_lens,
+                 )
+ 
++            # Narrow scoring to this rank; KV gathers remain unconditional for
++            # continuation chunks that reuse the workspace.
++            row_start, row_end = chunk.token_start, chunk.token_end
++            if row_shard is not None:
++                narrowed = row_shard.narrow(chunk)
++                if narrowed is None:
++                    continue
++                row_start, row_end, cu_seqlen_ks, cu_seqlen_ke = narrowed
++
+             # PCP + DCP KV all-gather.
+             deinterleave_idx = chunk.pcp_deinterleave_idx
+             if deinterleave_idx is not None:
+@@ -720,9 +812,13 @@ def sparse_attn_indexer(
+                     dcp_rank,
+                     dcp_world_size,
+                     cp_kv_cache_interleave_size,
+-                    row_starts=chunk.cu_seqlen_ks,
++                    row_starts=cu_seqlen_ks,
+                 )
+ 
++        if row_shard is not None:
++            # Rows are already fully ranked, so this is a layout gather.
++            row_shard.exchange_topk(topk_indices_buffer, topk_tokens)
++
+     if has_decode:
+         decode_metadata = attn_metadata_narrowed.decode
+         assert decode_metadata is not None

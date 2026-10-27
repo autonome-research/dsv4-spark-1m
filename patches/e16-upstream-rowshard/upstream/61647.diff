@@ -1,0 +1,121 @@
+diff --git a/tests/v1/attention/test_indexer_tp_row_shard.py b/tests/v1/attention/test_indexer_tp_row_shard.py
+index e65e4789f132..4bbbf93eb905 100644
+--- a/tests/v1/attention/test_indexer_tp_row_shard.py
++++ b/tests/v1/attention/test_indexer_tp_row_shard.py
+@@ -10,9 +10,11 @@
+ 
+ import vllm.model_executor.layers.sparse_attn_indexer as sparse_indexer
+ import vllm.v1.attention.backends.mla.indexer as indexer
+-from vllm.config import CUDAGraphMode
++from vllm.config import AttentionConfig, CUDAGraphMode
+ from vllm.model_executor.layers.sparse_attn_indexer import PrefillRowShard
+ 
++MIN_ROWS = AttentionConfig().indexer_tp_shard_min_rows
++
+ 
+ def _chunk(start: int, end: int) -> SimpleNamespace:
+     """Chunk over rows [start, end); bounds derive from the global row."""
+@@ -80,11 +82,11 @@ def all_gatherv(local, dim, sizes):
+     assert torch.all(buffer[decode + sum(sizes) :] == -7), "padding untouched"
+ 
+ 
+-@pytest.mark.parametrize("tp_size", [2, 4])
++@pytest.mark.parametrize("tp_size", [2, 4, 8])
+ def test_balanced_row_shard_partitions_and_declines(tp_size: int) -> None:
+     """The split covers every row once with >= 1 row per rank and declines
+     below the activation floor (or on a single rank)."""
+-    n = indexer.MIN_TP_SHARD_ROWS_PER_RANK * tp_size
++    n = MIN_ROWS
+     shapes = [
+         ([4 * n], [4 * n]),  # fresh prompt: the full causal cost ramp
+         # uneven requests at different context depths
+@@ -97,12 +99,38 @@ def test_balanced_row_shard_partitions_and_declines(tp_size: int) -> None:
+             torch.tensor(query_lens, dtype=torch.int32),
+             ratio,
+             tp_size,
++            n,
+         )
+         assert sizes is not None and len(sizes) == tp_size
+         assert sum(sizes) == sum(query_lens) and min(sizes) >= 1
+     lens = torch.tensor([n - 1], dtype=torch.int32)
+-    assert indexer.balanced_prefill_row_shard(lens, lens, ratio, tp_size) is None
+-    assert indexer.balanced_prefill_row_shard(lens, lens, ratio, 1) is None
++    assert indexer.balanced_prefill_row_shard(lens, lens, ratio, tp_size, n) is None
++    assert indexer.balanced_prefill_row_shard(lens, lens, ratio, 1, n) is None
++
++
++def test_row_shard_threshold_is_total_not_per_rank() -> None:
++    """The activation floor counts TOTAL rows regardless of tp_size: a
++    per-rank floor would need 128K rows at TP8, i.e. an unschedulable
++    --max-num-batched-tokens of 128K on 80 GB Hopper nodes."""
++    lens = torch.tensor([MIN_ROWS], dtype=torch.int32)
++    for tp_size in (2, 4, 8):
++        sizes = indexer.balanced_prefill_row_shard(lens, lens, 4, tp_size, MIN_ROWS)
++        assert sizes is not None
++
++
++def test_tp2_old_per_rank_window_stays_replicated() -> None:
++    """32K-64K total rows engaged on TP2 under the old per-rank floor
++    (16K rows/rank); the total floor now keeps them replicated — the
++    all_gatherv latency term is largest at small tp."""
++    window = torch.tensor([3 * MIN_ROWS // 4], dtype=torch.int32)
++    assert indexer.balanced_prefill_row_shard(window, window, 4, 2, MIN_ROWS) is None
++
++
++def test_row_shard_floor_is_at_least_tp_size() -> None:
++    """A floor below tp_size still leaves every rank at least one row."""
++    lens = torch.tensor([8], dtype=torch.int32)
++    assert indexer.balanced_prefill_row_shard(lens, lens, 4, 8, 1) is not None
++    assert indexer.balanced_prefill_row_shard(lens - 1, lens - 1, 4, 8, 1) is None
+ 
+ 
+ def test_row_sharding_gate_rejects_unsupported_configurations(
+diff --git a/vllm/config/attention.py b/vllm/config/attention.py
+index 67605f3c7e00..fc3ecb0dfc53 100644
+--- a/vllm/config/attention.py
++++ b/vllm/config/attention.py
+@@ -103,6 +103,10 @@ class AttentionConfig:
+     candidate pool instead, with fp32 logits, and keeps the masked dense walk
+     for steps whose contexts are too short for the pool to pay."""
+ 
++    indexer_tp_shard_min_rows: int = Field(default=65536, ge=1)
++    """Minimum total prefill rows for the sparse-attention indexer to split
++    them across TP ranks instead of scoring every row on each rank."""
++
+     hisparse_config: HiSparseConfig | None = None
+     """HiSparse host-resident KV configuration. Setting this enables experimental
+     Model Runner V2-only HiSparse sparse-MLA decode hot-buffering. It is inferred
+diff --git a/vllm/v1/attention/backends/mla/indexer.py b/vllm/v1/attention/backends/mla/indexer.py
+index 4f181733434e..468040257e46 100644
+--- a/vllm/v1/attention/backends/mla/indexer.py
++++ b/vllm/v1/attention/backends/mla/indexer.py
+@@ -205,19 +205,16 @@ def __call__(
+         )
+ 
+ 
+-# Below this many rows per rank, stay replicated (TP4 engages at 64K rows).
+-MIN_TP_SHARD_ROWS_PER_RANK = 16_384
+-
+-
+ def balanced_prefill_row_shard(
+     seq_lens_cpu: torch.Tensor,
+     query_lens_cpu: torch.Tensor,
+     compress_ratio: int,
+     tp_size: int,
++    min_rows: int,
+ ) -> list[int] | None:
+     """Return contiguous TP row counts balanced by indexer MQA work."""
+     num_rows = int(query_lens_cpu.sum())
+-    if tp_size < 2 or num_rows < MIN_TP_SHARD_ROWS_PER_RANK * tp_size:
++    if tp_size < 2 or num_rows < max(min_rows, tp_size):
+         return None
+ 
+     query_lens = query_lens_cpu.to(torch.int64)
+@@ -1584,6 +1581,7 @@ def build(
+                     prefill_query_lens_cpu,
+                     self.compress_ratio,
+                     self.tp_size,
++                    self.vllm_config.attention_config.indexer_tp_shard_min_rows,
+                 )
+             prefill_metadata = DeepseekV32IndexerPrefillMetadata(
+                 chunks,

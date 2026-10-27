@@ -1,0 +1,45 @@
+--- vllm/v1/attention/backends/mla/indexer.py
++++ vllm/v1/attention/backends/mla/indexer.py
+@@ -7,7 +7,7 @@
+ import torch
+ 
+ import vllm.envs as envs
+-from vllm.config import VllmConfig, get_current_vllm_config
++from vllm.config import CUDAGraphMode, VllmConfig, get_current_vllm_config
+ from vllm.distributed import get_dcp_group, get_pcp_group
+ from vllm.logger import init_logger
+ from vllm.model_executor.warmup.jit_warmup import kernel_launcher, zip_inputs
+@@ -712,6 +770,8 @@ def __call__(
+ class DeepseekV32IndexerPrefillMetadata:
+     chunks: list[DeepseekV32IndexerPrefillChunkMetadata]
+     max_prefill_seq_len: int = -1
++    # Per-TP-rank contiguous row counts, or None for the replicated path.
++    row_shard_sizes: list[int] | None = None
+ 
+ 
+ @dataclass
+@@ -1571,6 +1632,16 @@ def build(
+                 # Skip when total_seq_lens is 0 (i.e., no compressed token).
+                 if metadata is not None:
+                     chunks.append(metadata)
++            row_shard_sizes = None
++            if tp_prefill_row_sharding_supported(
++                self.vllm_config, self.dcp_world_size, self.use_pcp, self.tp_size
++            ):
++                row_shard_sizes = balanced_prefill_row_shard(
++                    seq_lens_cpu[num_decodes:],
++                    prefill_query_lens_cpu,
++                    self.compress_ratio,
++                    self.tp_size,
++                )
+             prefill_metadata = DeepseekV32IndexerPrefillMetadata(
+                 chunks,
+                 max_prefill_seq_len=(
+@@ -1578,6 +1649,7 @@ def build(
+                     if num_prefills > 0
+                     else 0
+                 ),
++                row_shard_sizes=row_shard_sizes,
+             )
+ 
+         decode_metadata = None

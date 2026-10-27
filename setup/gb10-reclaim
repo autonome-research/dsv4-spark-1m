@@ -1,0 +1,8 @@
+#!/bin/sh
+# Release memory the NVIDIA GB10 driver keeps pooled after CUDA processes exit
+# (driver >=590 regression; invisible to MemAvailable/cudaMemGetInfo), then
+# defragment so large contiguous GPU allocations don't stall on compaction.
+sync
+echo 3 > /proc/sys/vm/drop_caches
+echo 1 > /proc/sys/vm/compact_memory
+awk '/MemAvailable/{printf "MemAvailable %d GiB\n", $2/1048576}' /proc/meminfo

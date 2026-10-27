@@ -1,0 +1,12 @@
+dsv4-spark-1m
+Copyright 2026 Autonome Research
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+Files under patches/ are modified copies of, or are derived from, source files of
+  - vLLM (https://github.com/vllm-project/vllm), Copyright contributors to the vLLM project
+  - FlashInfer (https://github.com/flashinfer-ai/flashinfer), Copyright FlashInfer team
+both licensed under the Apache License, Version 2.0. Their original copyright
+notices are retained in those files, and the *.orig.* files are unmodified upstream
+copies kept for diffing. patches/dsv4-fi4732-sparse_mla_sm120.so is a FlashInfer
+module rebuilt from patches/fi4732/.
