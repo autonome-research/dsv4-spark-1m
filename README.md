@@ -31,6 +31,7 @@ to improve its decode and prefill speed.
 - [Benchmarking](#benchmarking)
 - [Known issues and limitations](#known-issues-and-limitations)
 - [Upstream status](#upstream-status)
+- [Reusing this work](#reusing-this-work)
 - [Further documentation](#further-documentation)
 - [Acknowledgements](#acknowledgements)
 - [Licence](#licence)
@@ -382,6 +383,41 @@ spread and should not be attributed to a change.
 | FlashInfer #4732 | Merged upstream; backported here because the image predates it |
 | Split indexer | Not proposed: vLLM #54951 + #61647 (indexer TP row sharding) address the same cost. Ported here as `DSV4_IDX_MODE=rowshard` with `indexer_tp_shard_min_rows` 8192. Serving A/B (E16): correct at 1M, no speed difference from our split (820.3 vs 819.2 s). Split stays the default; GB10 data can go to the upstream PR |
 | Chunked compressor GEMV | Candidate: +1.5–3.3 % decode with unchanged accuracy (R01.1). Needs an SM12x gate before a proposal |
+
+## Reusing this work
+
+Everything here is Apache-2.0 (see [Licence](#licence)), so the patches and scripts may
+be used, modified and redistributed, including commercially. In practice they are tied
+to the setup they were measured on:
+
+- **vLLM version.** Each patch is a whole replacement file, bind-mounted over the
+  matching file in `local/vllm-openai:46638857-fi0618` (vLLM commit `46638857fdbb`).
+  On another vLLM version they will likely fail or misbehave unless ported; diff
+  against the `*.orig.py` files to see the actual change.
+- **Model.** All three patches touch DeepSeek-V4 code paths (compressor, Lightning
+  Indexer, sparse MLA).
+- **Hardware.** Measured on GB10 (DGX Spark, SM121). The FlashInfer `.so` is compiled
+  for SM12x and this image's FlashInfer; it will not load elsewhere.
+
+| Patch | Who can use it |
+|---|---|
+| FlashInfer #4732 backport | Anyone on SM120/SM121 (Blackwell desktop or GB10) with a FlashInfer older than the #4732 merge: it fixes a real prefill hang. With a newer FlashInfer it is not needed |
+| Split indexer | DeepSeek-V4 at long context with TP ≥ 2, where the replicated indexer was about 46 % of 1M prefill [inferred]. On newer vLLM, prefer the upstream row sharding (#54951 + #61647), which measured the same speed (E16) |
+| Chunked compressor GEMV | GB10 and possibly similar parts; +1.5–3.3 % decode. On other GPUs cuBLAS may already be efficient and the gain may be zero. Needs an architecture gate before going upstream |
+
+**Running the whole stack on another pair of DGX Sparks.** The repository works as a
+recipe: launcher, safety guards, patches and benchmarks. Adapt:
+
+- hostnames and CX7 addresses (`spark-61dd`, `gx10-6d0c`, the SSH alias `gx10`,
+  `192.168.200.x`/`201.x`) in the top-level scripts, `cx7-nccl-env.sh`, `tools/` and
+  `setup/` (`grep -rn -E "gx10|spark-61dd|192\.168\.20[01]"` lists them);
+- the Hugging Face cache path (`DSV4_HF_CACHE`, used by `node-launch.sh`);
+- the one-time node setup in `setup/` (`gb10-reclaim`, sudoers rule);
+- the image: build or obtain vLLM `46638857fdbb` with FlashInfer `0.6.18.dev20260819`,
+  or port the patches to your version.
+
+Then follow [Quick start](#quick-start) and check results against
+[Results](#results) with `tools/final-bench.sh`.
 
 ---
 
