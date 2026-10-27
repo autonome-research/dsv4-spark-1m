@@ -1596,3 +1596,7 @@ Two read-only reviews checked the docs against the code and log, and the code co
   The abort path was not exercised (no abort happened).
 - [measured] Thermal loggers on both nodes kept running across the server restart. The handover note wrongly said they do not, and is corrected; `docs/operations.md` already says "does not survive a reboot", which is correct.
 - [measured] Per-boot 4K check (`data/RESTART/*-r02-cleanup-scripts/`): decode median **26.69** tok/s (26.66–26.73), TTFT 1.7 s. That is 0.3 % below the earlier boot range 26.78–27.26 and within the 1.8 % boot-to-boot spread [inferred: no regression from the script changes, none of which touch the serving path].
+- **Correction (R02 consequences)** [measured]: R02 is a sixth patch-on boot at 26.69 tok/s, below the previous minimum of 26.78.
+  - Boot-to-boot spread: 1.8 % → **2.1 %** (26.69–27.26).
+  - GEMV gain range (against the patch-off boot at 26.38): +1.5–3.3 % → **+1.2–3.3 %**.
+  - Updated in README, `docs/patches.md`, the handover note and the final report, which is now **v1.1** with a change note at the end. v1.1 also records the helper's first real intervention: it meets the report's success criterion once; one case, not proof. The earlier figures were correct for the five boots then measured.

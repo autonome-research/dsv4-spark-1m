@@ -49,9 +49,9 @@ the DeepSeek-V4 compressor run as cuBLAS GEMVs. On GB10, cuBLAS reaches about
 **Change.** When M ≤ 8, the projection is issued in 512-row chunks. Prefill is
 unchanged.
 
-**Result.** 4K decode **+1.5 % to +3.3 %**: 26.38 tok/s with the patch off (R01.1)
-against 26.78–27.26 tok/s on five patch-on boots (R01.3, R01.6). The range reflects
-the 1.8 % boot-to-boot spread, because a bind-mounted patch cannot be switched within
+**Result.** 4K decode **+1.2 % to +3.3 %**: 26.38 tok/s with the patch off (R01.1)
+against 26.69–27.26 tok/s on six patch-on boots (R01.3, R01.6, R02). The range reflects
+the 2.1 % boot-to-boot spread, because a bind-mounted patch cannot be switched within
 one boot. The first measurement (E07.8, 26.64 → 26.93, +1.1 %) was also across boots.
 
 **Numerics.** In isolation, decode outputs differ only by fp32 summation order

@@ -79,7 +79,7 @@ What produced the gains (details in [docs/patches.md](docs/patches.md)):
 | Async scheduling (`--async-scheduling`) | Decode +7.6 % at 4K; removes the host gap between steps |
 | Prefill chunk 8192 (was 4096) | 64K prefill +55 %, 1M prefill +4.9 % |
 | Split Lightning Indexer across TP ranks | 1M TTFT −19.5 % on an identical prompt |
-| Chunked compressor GEMV | Decode +1.5–3.3 % at 4K; task accuracy unchanged (R01.1) |
+| Chunked compressor GEMV | Decode +1.2–3.3 % at 4K; task accuracy unchanged (R01.1, R02) |
 | FlashInfer #4732 backport | Removes a named-barrier hang in the SM120/121 sparse MLA prefill kernel |
 | `VLLM_HOST_IP` pinned to the CX7 link | vLLM control plane no longer crosses WiFi; fixes post-idle crashes |
 | Fixed KV cache size (`--kv-cache-memory-bytes`) | Same KV capacity on every boot (1.04 × 1M tokens) |
@@ -360,10 +360,11 @@ spread and should not be attributed to a change.
 - **Boot stall at KV allocation (I02 class)**: in roughly 1 boot in 3, memory
   fragmentation stalls the KV-cache allocation and the boot guard aborts the start;
   a retry has always succeeded. Since 2026-10-26 `tools/boot-compact.sh` compacts
-  memory during boot as soon as pressure builds (R01.4); it has not yet met a stall,
-  so its effect is unproven. Root cause not established.
-- **Boot-to-boot speed spread**: an unchanged configuration gives 26.8–27.3 tok/s
-  at 4K on different boots (1.8 %); within a boot the spread is ≤ 0.2 tok/s.
+  memory during boot as soon as pressure builds (R01.4). On its first real
+  intervention (R02) one reclaim restored the free high-order memory and the boot
+  served; one case, so not yet proof. Root cause not established.
+- **Boot-to-boot speed spread**: an unchanged configuration gives 26.7–27.3 tok/s
+  at 4K on six boots (2.1 %); within a boot the spread is ≤ 0.2 tok/s.
 - **Leader runs hotter** than the worker (+8 °C, SW thermal slowdown in 9 % of busy
   samples). Airflow has not been checked physically.
 - **WiFi**: the leader's BSSID pin does not stop roaming between the two routers.
@@ -382,7 +383,7 @@ spread and should not be attributed to a change.
 |---|---|
 | FlashInfer #4732 | Merged upstream; backported here because the image predates it |
 | Split indexer | Not proposed: vLLM #54951 + #61647 (indexer TP row sharding) address the same cost. Ported here as `DSV4_IDX_MODE=rowshard` with `indexer_tp_shard_min_rows` 8192. Serving A/B (E16): correct at 1M, no speed difference from our split (820.3 vs 819.2 s). Split stays the default; GB10 data can go to the upstream PR |
-| Chunked compressor GEMV | Candidate: +1.5–3.3 % decode with unchanged accuracy (R01.1). Needs an SM12x gate before a proposal |
+| Chunked compressor GEMV | Candidate: +1.2–3.3 % decode with unchanged accuracy (R01.1, R02). Needs an SM12x gate before a proposal |
 
 ## Reusing this work
 
@@ -403,7 +404,7 @@ to the setup they were measured on:
 |---|---|
 | FlashInfer #4732 backport | Anyone on SM120/SM121 (Blackwell desktop or GB10) with a FlashInfer older than the #4732 merge: it fixes a real prefill hang. With a newer FlashInfer it is not needed |
 | Split indexer | DeepSeek-V4 at long context with TP ≥ 2, where the replicated indexer was about 46 % of 1M prefill [inferred]. On newer vLLM, prefer the upstream row sharding (#54951 + #61647), which measured the same speed (E16) |
-| Chunked compressor GEMV | GB10 and possibly similar parts; +1.5–3.3 % decode. On other GPUs cuBLAS may already be efficient and the gain may be zero. Needs an architecture gate before going upstream |
+| Chunked compressor GEMV | GB10 and possibly similar parts; +1.2–3.3 % decode. On other GPUs cuBLAS may already be efficient and the gain may be zero. Needs an architecture gate before going upstream |
 
 **Running the whole stack on another pair of DGX Sparks.** The repository works as a
 recipe: launcher, safety guards, patches and benchmarks. Adapt:

@@ -1,6 +1,6 @@
 # DSV4 optimisation: final report
 
-**Version 1.0, 2026-10-26.** It is compiled from `reports/DSV4 optimisation log.md`, entries E01–E16, F01–F02, I01–I03 and R01.0–R01.7. It supersedes `DSV4 final report (draft).md` of 2026-10-24. One item is still open, because it can only close on its own: the boot-compaction helper has not yet seen a real stall (section 8, item 1).
+**Version 1.1, 2026-10-26.** It is compiled from `reports/DSV4 optimisation log.md`, entries E01–E16, F01–F02, I01–I03, R01.0–R01.7 and R02. It supersedes `DSV4 final report (draft).md` of 2026-10-24. v1.1 adds R02: the boot-compaction helper's first real intervention, and a sixth boot that widens the boot spread and the GEMV range (changes listed at the end).
 
 **Scope:** serving DeepSeek-V4-Flash-0731 (NVFP4) at 1M context, one request at a time, on two DGX Spark GB10 nodes:
 - spark-61dd: the leader, 192.168.200.10;
@@ -61,7 +61,7 @@ Each run was a single request, with DSpark off and thinking off. "Start" is conf
 | 512K | 21.62 [E06] | — | — |
 | 1M | 21.08 [E06] | 24.76 | **25.12** |
 
-- **Boot-to-boot spread** (R01.3, R01.6): five boots with the final configuration gave 4K decode of 26.78–27.26 tok/s, a 1.8 % spread. Within one boot, three requests vary by ≤ 0.2 tok/s.
+- **Boot-to-boot spread** (R01.3, R01.6): five boots with the final configuration gave 4K decode of 26.78–27.26 tok/s, a 1.8 % spread; a sixth boot (R02) gave 26.69, widening it to 26.69–27.26 (2.1 %). Within one boot, three requests vary by ≤ 0.2 tok/s.
   - [inferred] Cross-boot differences below about 2 % cannot be attributed to a change.
   - Why some boots are faster is not known [hypothesis: thermal state or per-boot memory placement].
 - The 4K step time fell from 42.4 ms (E07.0) to about 36.8 ms (FINAL).
@@ -98,7 +98,7 @@ Each run was a single request, with DSpark off and thinking off. "Start" is conf
 | Boot guards, pre-launch reclaim, MemFree ≥ 100 GiB gate, post-load reclaim | E02, E05 | Boots reach serving instead of aborting | — |
 | Async scheduling | E07.6 | 4K decode +7.6 %; step-tail gap 0.8–1.6 ms → 0 | `DSV4_ASYNC` |
 | GPU clocks uncapped | E07.4 | +5.1 % decode (not isolated from the HCA and profiler changes) | `setup/node-prep.sh` no longer caps clocks (R01.7) |
-| Chunked compressor GEMV patch (`patches/dsv4-attention.py`) | E07.8, R01.1, R01.3 | **+1.5 % to +3.3 % decode** (patch-off boot 26.38 vs patch-on boots 26.78–27.26); task accuracy unchanged (41/52 on and off); 52/54 prompts token-identical, the 2 others at near-ties | `DSV4_PATCH` |
+| Chunked compressor GEMV patch (`patches/dsv4-attention.py`) | E07.8, R01.1, R01.3 | **+1.2 % to +3.3 % decode** (patch-off boot 26.38 vs patch-on boots 26.69–27.26); task accuracy unchanged (41/52 on and off); 52/54 prompts token-identical, the 2 others at near-ties | `DSV4_PATCH` |
 | 8192-token prefill chunks | E10 | 64K prefill +55 %; 1M +4.9 % | `DSV4_MAX_BATCH` |
 | `VLLM_HOST_IP` pinned to CX7 | E09 | No vLLM control-plane socket on WiFi; idle-latency failure gone | — |
 | Split Lightning Indexer (`patches/dsv4-sparse-attn-indexer.py`) | E11–E14 | 1M TTFT −19.5 % (same client, same prompt) | `DSV4_IDX_MODE=split` (default) |
@@ -106,7 +106,7 @@ Each run was a single request, with DSpark off and thinking off. "Start" is conf
 | Peerwatch (leader), leaderwatch (worker) | 2026-10-19, I01 | Lost peer → both sides stopped; worked as designed in I03 | `DSV4_PEERWATCH`, `DSV4_LEADERWATCH` |
 | Stale-watcher retirement at start | 2026-10-24 | Removes the leaked-guard false alert that ended F02 soak part 1 | — |
 | Abort: retry the worker `docker inspect` (3×) | R01.7 | Fixes the 2026-10-24 case where one timed-out inspect left the worker running; not yet exercised | — |
-| Boot-compaction helper (`tools/boot-compact.sh`) | R01.4–R01.6 | Runs `gb10-reclaim` when memory PSI > 20 for 6 s during boot, before the guard's 30 s rule; 2 clean boots, stall path not yet exercised | `DSV4_BOOT_COMPACT` |
+| Boot-compaction helper (`tools/boot-compact.sh`) | R01.4–R01.6, R02 | Runs `gb10-reclaim` when memory PSI > 20 for 6 s during boot, before the guard's 30 s rule. First real intervention in R02: PSI 41 with no free order ≥ 9 blocks, one reclaim restored 1,821 blocks, PSI below 20 within 8 s, boot served | `DSV4_BOOT_COMPACT` |
 | Thermal logging (`tools/thermlog.sh`) | E13, R01.7 | Both nodes, after serving starts; restarted 2026-10-26 after a 4-day gap | — |
 
 Smaller operational changes: launcher `down` cleanup, observer `nvidia-smi` tolerance, persisted TileLang/Triton caches, static CX7 IPv4 profiles, leader WiFi pinned to 5 GHz, worker WiFi keepalive timer, fstrim D-state exception in the guard.
@@ -182,7 +182,7 @@ Code, documentation and history are in the git repository `/srv/dsv4/run` (READM
 
 ## 8. Open items
 
-1. **Boot-compaction helper not yet proven.** It is in place and logs each boot to `runs/<id>/<role>/boot-compact.log`. Success means a boot whose PSI passes 20 for 6 s reaches serving without the guard firing. If it does not help, the guard aborts as before; the next step would then be a pre-KV compaction, or a longer boot window with a hard D-state limit.
+1. **Boot-compaction helper: one success, not yet proven.** It logs each boot to `runs/<id>/<role>/boot-compact.log`. Success means a boot whose PSI passes 20 for 6 s reaches serving without the guard firing. R02 met this once (PSI above 20 for 16 s, peak 41, one reclaim, served); whether that boot would have aborted without the helper cannot be known, so more boots are needed. If it does not help, the guard aborts as before; the next step would then be a pre-KV compaction, or a longer boot window with a hard D-state limit.
 2. **Decode target (29–33 tok/s).** It needs DSpark speculative decoding, a separate phase. Plan (from the 2026-10-21 survey):
    - one change from today's config;
    - per-rank collective-count diffs after every request;
@@ -193,7 +193,7 @@ Code, documentation and history are in the git repository `/srv/dsv4/run` (READM
    - The GEMV patch as a vLLM issue or PR. It needs an SM12x gate, and ideally a same-boot A/B, which the bind-mount design cannot do without a restart.
    - An E16 comment on vLLM #54951 / #61647: works on 2×GB10 at TP=2 and 1M, with no speed change and the threshold at 8192.
 6. **Smaller items.**
-   - Unexplained cross-boot variation (decode 1.8 %; token-level nondeterminism, E12b).
+   - Unexplained cross-boot variation (decode 2.1 % over six boots; token-level nondeterminism, E12b).
    - The ctxbench/e12b_client 1M TTFT difference.
    - Leaderwatch and the abort retry have not run in a real failure.
    - mt7925 upstream status.
@@ -213,3 +213,10 @@ Code, documentation and history are in the git repository `/srv/dsv4/run` (READM
 | `~/.cache/dsv4-t2/runs/<run-id>/` | Guard state, alerts, peerwatch, post-load reclaim and boot-compact logs |
 | `/srv/dsv4/diagnostics/<host>/` | Profiler traces, NCCL logs |
 | `reports/research_notes/` | vLLM upstream and DSpark surveys |
+
+---
+
+**Changes in v1.1 (2026-10-26, R02).** Added the boot-compaction helper's first real
+intervention (sections 4 and 8). A sixth patch-on boot (26.69 tok/s) widened the
+boot-to-boot spread from 1.8 % to 2.1 % and the GEMV gain range from +1.5–3.3 % to
++1.2–3.3 %. v1.0 figures were correct for the five boots then measured.
