@@ -436,7 +436,7 @@ corrections are appended rather than rewritten.
 
 Built on [vLLM](https://github.com/vllm-project/vllm) and
 [FlashInfer](https://github.com/flashinfer-ai/flashinfer). The baseline launcher is
-a modified copy of the operator's configuration in `/srv/dsv4/live/` (not part of
+a modified copy of the deployment by our collaborator Velvet in `/srv/dsv4/live/` (not part of
 this repository). Files under `patches/`
 derived from vLLM and FlashInfer keep their upstream licences (Apache-2.0).
 

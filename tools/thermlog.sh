@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Thermal / clock log while DSV4 serves (the operator's D8: keep watching thermal throttling).
+# Thermal / clock log while DSV4 serves (Velvet's D8: keep watching thermal throttling).
 # Every INTERVAL s (default 30) appends one nvidia-smi sample to DIR/<host>-<YYYYMMDD>.csv:
 #   time, graphics clock, SM clock, power, temperature, utilisation, clocks_event_reasons.active
 # Reason bits (NVML): 0x4 SW power cap, 0x20 SW thermal slowdown, 0x40 HW thermal slowdown, 0x80 HW power brake.

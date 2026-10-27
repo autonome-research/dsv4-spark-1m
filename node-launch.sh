@@ -311,7 +311,7 @@ if ! timeout --kill-after=2 180 docker run -d --name "$NAME" --restart=no \
   --network host --ipc host --gpus all \
   --ulimit memlock=-1 --shm-size 64gb \
   --cap-add=IPC_LOCK --cap-add=SYS_PTRACE "${RDMA[@]}" \
-  -v "${DSV4_HF_CACHE:-/home/<operator>/.cache/huggingface}:/root/.cache/huggingface" \
+  -v "${DSV4_HF_CACHE:-/home/<collaborator>/.cache/huggingface}:/root/.cache/huggingface" \
   -v "$RUNTIME_CACHE_ROOT/torchinductor:/tmp/torchinductor_root" \
   -v "$RUNTIME_CACHE_ROOT/vllm:/root/.cache/vllm" \
   -v "$RUNTIME_CACHE_ROOT/tilelang:/root/.tilelang" \

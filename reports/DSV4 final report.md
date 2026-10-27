@@ -118,7 +118,7 @@ Smaller operational changes: launcher `down` cleanup, observer `nvidia-smi` tole
 | E16: upstream indexer row sharding (vLLM #54951 + #61647, backported) | Works at 1M with correct retrieval on 2×GB10. **No measurable gain** against our split: TTFT 29.1 / 134.4 / 820.3 s vs 29.9 / 134.9 / 819.2 s (64K / 256K / 1M), and 4K decode is the same. Split stays the default. The rowshard patches are kept in `patches/e16-upstream-rowshard/` |
 | NCCL diagnostics off (`DSV4_DIAG=0`) | No measurable speed difference (26.86 vs 26.78–27.26 tok/s). Diagnostics stay on for debugging (R01.3) |
 | E03: `vm.compaction_proactiveness=0` | No benefit; the kernel default of 20 is kept |
-| E03: pausing the operator's `nvtop` | The stall continued |
+| E03: pausing Velvet's `nvtop` | The stall continued |
 | E07.1 / E07.2: NCCL logging or communication as the decode cost | Refuted (E07.5): NCCL is 5–8 % of the step |
 | Raising `VLLM_EXECUTE_MODEL_TIMEOUT_SECONDS` | Rejected (INV-1): it would only delay the WiFi failure |
 | Warm-up prompts | Not needed; the persisted runtime cache already removes the JIT delay |
@@ -158,7 +158,7 @@ Smaller operational changes: launcher `down` cleanup, observer `nvidia-smi` tole
 
 ## 7. Final configuration
 
-The launcher is `/srv/dsv4/run/start-dsv4-default.sh`, a modified copy of the operator's `/srv/dsv4/live/` (D1). Every item below is a launcher default.
+The launcher is `/srv/dsv4/run/start-dsv4-default.sh`, a modified copy of the deployment by our collaborator Velvet in `/srv/dsv4/live/` (D1). Every item below is a launcher default.
 
 | Item | Value |
 |---|---|

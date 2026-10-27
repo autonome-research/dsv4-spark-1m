@@ -52,7 +52,7 @@ Memory headroom during the 512K and 1M runs [measured]: leader MemAvailable abou
 
 ### Config C1: current known-good
 
-- Launch scripts are in `/srv/dsv4/run/`, a modified copy of the operator's `/srv/dsv4/live/`. The launcher is `start-dsv4-default.sh`.
+- Launch scripts are in `/srv/dsv4/run/`, a modified copy of Velvet's `/srv/dsv4/live/`. The launcher is `start-dsv4-default.sh`.
 - Parallelism and kernels: TP=2 across both nodes, KV dtype `fp8_ds_mla`, attention `FLASHINFER_MLA_SPARSE_DSV4`, MoE `deep_gemm`, DSpark off.
 - KV cache: `--kv-cache-memory-bytes 9663676416` (9 GiB). This gives 1,747,385 KV tokens, or 1.67× of 1M [measured].
 - Flags: `--enable-prefix-caching --no-async-scheduling --enable-chunked-prefill --no-enable-flashinfer-autotune`.
@@ -65,10 +65,10 @@ Memory headroom during the 512K and 1M runs [measured]: leader MemAvailable abou
 
 ## Experiment log
 
-### E01: Run the operator's launcher from a second account (2026-10-12) · SUCCESS
+### E01: Run Velvet's launcher from a second account (2026-10-12) · SUCCESS
 
-- **Question:** Can the attended T2 launch framework run from the user account without changing the operator's live files?
-- **Change:** Copied the scripts to `/srv/dsv4/run/`. HERE, the guard, observer, cache and diagnostics paths now point at that copy or at `$HOME`. scp targets `"$PEER:"`. The worker IPs were added to the `gx10` ssh Host entry. Scripts were made executable. The weights mount stays the operator's HF cache, mounted by the docker daemon.
+- **Question:** Can the attended T2 launch framework run from the user account without changing Velvet's live files?
+- **Change:** Copied the scripts to `/srv/dsv4/run/`. HERE, the guard, observer, cache and diagnostics paths now point at that copy or at `$HOME`. scp targets `"$PEER:"`. The worker IPs were added to the `gx10` ssh Host entry. Scripts were made executable. The weights mount stays Velvet's HF cache, mounted by the docker daemon.
 - **Result:** The launcher reached the admission, guard and launch stages [measured].
 - **Failures fixed along the way** [measured]:
   1. Raw-IP ssh to the worker failed with a publickey error.
@@ -87,12 +87,12 @@ Memory headroom during the 512K and 1M runs [measured]: leader MemAvailable abou
 
 - **Reason for trying it:** The research report recommended 0, so that background compaction would not compete with the model.
 - **Result** [measured]:
-  - With 0 set on both nodes, the boot still aborted at KV allocation. The 18:13 UTC alert was `D-state>10s` on the leader with PSI 33.3 and MemAvailable 21 GiB. The D-state processes included the operator's `nvtop` (pid 394774).
+  - With 0 set on both nodes, the boot still aborted at KV allocation. The 18:13 UTC alert was `D-state>10s` on the leader with PSI 33.3 and MemAvailable 21 GiB. The D-state processes included Velvet's `nvtop` (pid 394774).
   - The setting was restored to 20 at 18:17 UTC.
   - The next boot, at 19:31 UTC, still alerted at KV allocation: `residual_growth+psi_stall`, leader PSI 7.7, worker PSI 8.3.
 - **Verdict:** Neither value prevented the KV-allocation stall, so 0 had no benefit. 20 is the kernel default, and we keep it because there is no evidence for changing it.
 - **Correction (2026-10-12, local evening):** An earlier chat summary said 0 "made the stalls worse". The measurements above do not support that claim. They show only that 0 did not help.
-- **Pausing `nvtop`:** the operator's `nvtop` was paused with SIGSTOP on both nodes because it appeared in D-state. The stall continued after the pause [measured]. The pause is still in place, and `sudo pkill -CONT nvtop` resumes it.
+- **Pausing `nvtop`:** Velvet's `nvtop` was paused with SIGSTOP on both nodes because it appeared in D-state. The stall continued after the pause [measured]. The pause is still in place, and `sudo pkill -CONT nvtop` resumes it.
 
 ### E04: KV cache size pinned instead of profiled (2026-10-12) · SUCCESS
 
@@ -197,7 +197,7 @@ Memory headroom during the 512K and 1M runs [measured]: leader MemAvailable abou
   4. Pick the next change from the largest component.
 - **Candidate changes, ranked by what the profile shows:**
   - **Communication** [hypothesis]: `NCCL_PROTO=LL` or `LL128`, or `NCCL_ALGO` for small all-reduces.
-  - **Host gaps** [hypothesis]: async scheduling, or FULL graphs without breakable graphs. The operator measured breakable=0 as a prefill regression, so it would be checked for both decode and prefill.
+  - **Host gaps** [hypothesis]: async scheduling, or FULL graphs without breakable graphs. Velvet measured breakable=0 as a prefill regression, so it would be checked for both decode and prefill.
   - **Kernels** [hypothesis]: MoE backend or kernel choice.
 
 ### E08: Slow first request after idle · ROOT CAUSE FOUND. The server crashed during the test; a fix is ready but not verified (E09)
@@ -260,11 +260,11 @@ Memory headroom during the 512K and 1M runs [measured]: leader MemAvailable abou
 
 ### INV-1: Why the deployment keeps failing (2026-10-13) · COMPLETE
 
-- **Scope:** Three read-only investigations covered the network and WiFi, every launch attempt from 10-10 to 10-13, and the operator's history from August to October. The full write-ups are in `/srv/dsv4/run/data/investigation/` (`network.md`, `timeline.md`, `history.md`). Key claims were spot-checked independently, as noted below.
+- **Scope:** Three read-only investigations covered the network and WiFi, every launch attempt from 10-10 to 10-13, and Velvet's history from August to October. The full write-ups are in `/srv/dsv4/run/data/investigation/` (`network.md`, `timeline.md`, `history.md`). Key claims were spot-checked independently, as noted below.
 
 **Finding 1: one recurring root cause behind most serving hangs.**
 
-- vLLM's engine-to-worker control queues use `get_ip()`. That is the default-route address, which is WiFi `wlP9s9`. No launcher, ours or the operator's, ever set `VLLM_HOST_IP`.
+- vLLM's engine-to-worker control queues use `get_ip()`. That is the default-route address, which is WiFi `wlP9s9`. No launcher, ours or Velvet's, ever set `VLLM_HOST_IP`.
   - [measured, spot-checked] 19 saved leader logs from Aug 15–31 show `mq_connect_ip=10.0.0.239`.
   - [measured, `network.md`] The leader's broadcast queue, the worker's response queue and the cross-node broadcaster are all bound this way.
 - **Why the WiFi drops out** [measured, `network.md`]:
@@ -272,11 +272,11 @@ Memory headroom during the 512K and 1M runs [measured]: leader MemAvailable abou
   - wpa_supplicant roams between them within one profile, and each roam is followed by a new DHCP lease on the other subnet. There are no disconnect or beacon-loss events.
   - The journal shows this back to Aug 7 on the leader and Aug 26 on the worker, with 236 switches on Oct 9 alone. A stay on the Google network lasts about 318 s, which is longer than vLLM's 300 s execute-model timeout.
   - The two nodes roam independently. During both E08 stalls, only the leader changed subnet; the worker stayed on 10.0.0.106. This corrects E08's "both nodes".
-- **The operator's earlier hangs on another model S10 and S12 (Oct 2–3)** [measured, spot-checked]:
+- **Velvet's earlier hangs on another model S10 and S12 (Oct 2–3)** [measured, spot-checked]:
   - The leader roamed to 192.168.86.215 at 22:08:45 and 22:40:30 local. The containers exited at 22:13:47 and 22:45:33, +302 s each time (300 s timeout plus teardown), and both before WiFi returned.
   - S12's recorded symptoms match E08 exactly: leader GPU spinning, worker GPU at 0%, workers waiting in `shm_broadcast.dequeue`.
   - The earlier "TP rank collective mismatch / prefix cache" explanation is not supported. **Confidence: high.**
-- **The operator's post-reboot stalls, Aug 21/25/26** [inferred, `history.md`]: Autostart launched while the leader was on 192.168.86.x. The "ping check and settle delay" fix worked because WiFi had returned by then. **Confidence: medium.** Aug 25 also had a real RoCE GID problem.
+- **Velvet's post-reboot stalls, Aug 21/25/26** [inferred, `history.md`]: Autostart launched while the leader was on 192.168.86.x. The "ping check and settle delay" fix worked because WiFi had returned by then. **Confidence: medium.** Aug 25 also had a real RoCE GID problem.
 - **Still open** [`history.md`]: the DSpark first-request hang, the 660K `sample_tokens` timeout, and the Aug 15 and 151K `execute_model` timeouts.
   - Each shows the same signature: rank 0 at 96%, rank 1 idle, a 300 s timeout.
   - But the leader's WiFi was stable at those times, and the worker's journal starts only on Aug 26, so a worker-side roam cannot be checked. The 660K event also had severe memory pressure.
@@ -341,16 +341,16 @@ Memory headroom during the 512K and 1M runs [measured]: leader MemAvailable abou
 
 | ID | Date | Decision | Why | Consequence | Status |
 |---|---|---|---|---|---|
-| D1 | 2026-10-12 | Run from a modified copy (`/srv/dsv4/run`), never edit `/srv/dsv4/live` | The operator's live setup must stay intact | We maintain two script trees | Accepted |
+| D1 | 2026-10-12 | Run from a modified copy (`/srv/dsv4/run`), never edit `/srv/dsv4/live` | Velvet's live setup must stay intact | We maintain two script trees | Accepted |
 | D2 | 2026-10-12 | Reclaim and gate MemFree ≥ 100 GiB before launch | E02 | Launch takes about 1 min longer | Accepted |
 | D3 | 2026-10-12 | Pin KV at 9 GiB | E04 | Fixed 1.67× of 1M; no headroom for concurrency above 1 at 1M | Accepted |
 | D4 | 2026-10-12 | Relax guard rules during boot only | E05 (user approved) | Less protection during boot | Accepted |
 | D5 | 2026-10-12 | Keep `compaction_proactiveness=20` | E03 | none | Accepted |
 | D6 | 2026-10-12 | Pin `VLLM_HOST_IP` to the CX7 address on each node | E08: WiFi roaming stalled and then killed the engine | The server no longer depends on WiFi | Accepted, checked by E09 |
 | D7 | 2026-10-16 | Async scheduling on by default when DSpark is off | E07.6: +7.6% decode at 4K, +17.5% at 1M vs E06; 1M and idle probes passed | Untested with DSpark on, so it stays off there; one 16 h run of evidence so far | Accepted |
-| D8 | 2026-10-20 | GPUs stay uncapped (no `-lgc 0,2100`) | The operator's reply 2026-10-20 (decision 1a), on condition that thermal throttling is watched | Thermal throttling on the leader (E13) must be monitored | Accepted |
-| D9 | 2026-10-20 | Bind-mounted vLLM patches (`attention.py`, `sparse_attn_indexer.py`) may be the default | The operator's reply 2026-10-20 (decision 3a); the operator also asks that they be proposed to vLLM main, after reading vLLM's CONTRIBUTING.md | `apply-idxsplit-default.sh` may be applied | Accepted |
-| D10 | 2026-10-20 | DSpark may go ahead | The operator's reply 2026-10-20 (decision 2a). The operator says the rank-divergence deadlock and large-context prefill are still open, and that the WiFi-roaming hangs are probably not the main DSpark problem; the operator suspects TP=2 and GB10 compatibility. First review open/closed vLLM PRs that tried to fix this, and why they were not merged | No window named; plan for a possible reboot of both nodes | Accepted, not started |
+| D8 | 2026-10-20 | GPUs stay uncapped (no `-lgc 0,2100`) | Velvet's reply 2026-10-20 (decision 1a), on condition that thermal throttling is watched | Thermal throttling on the leader (E13) must be monitored | Accepted |
+| D9 | 2026-10-20 | Bind-mounted vLLM patches (`attention.py`, `sparse_attn_indexer.py`) may be the default | Velvet's reply 2026-10-20 (decision 3a); Velvet also asks that they be proposed to vLLM main, after reading vLLM's CONTRIBUTING.md | `apply-idxsplit-default.sh` may be applied | Accepted |
+| D10 | 2026-10-20 | DSpark may go ahead | Velvet's reply 2026-10-20 (decision 2a). Velvet says the rank-divergence deadlock and large-context prefill are still open, and that the WiFi-roaming hangs are probably not the main DSpark problem; Velvet suspects TP=2 and GB10 compatibility. First review open/closed vLLM PRs that tried to fix this, and why they were not merged | No window named; plan for a possible reboot of both nodes | Accepted, not started |
 
 ## Open items and housekeeping
 
@@ -358,11 +358,11 @@ Memory headroom during the 512K and 1M runs [measured]: leader MemAvailable abou
 - **Server is running:** run `dsv4-t2-20261021T005449Z-775571` (since 2026-10-20 17:59 local) with 8192 chunks, the split indexer, the GEMV patch, the FlashInfer #4732 fix (E15) and peerwatch.
 - **Staged, not applied:** `scratchpad/apply-fi4732-default.sh` (makes E15 the default).
 - **Upstream:** replace our split indexer with vLLM #54951 + #61647 (`indexer_tp_shard_min_rows` 8192) and A/B it; contribute GB10/TP=2 threshold data instead of our patch. GEMV patch: needs a same-boot benchmark and an accuracy eval before any upstream proposal.
-- **DSpark (D10):** survey done; first one-change experiment not started; needs a window agreed with the operator.
-- **Next project** (another model) stability work: queued by the operator, not started.
+- **DSpark (D10):** survey done; first one-change experiment not started; needs a window agreed with Velvet.
+- **Next project** (another model) stability work: queued by Velvet, not started.
 - **Known false alerts:** the weekly `fstrim.timer` trips the guard's D-state check; not fixed.
-- **Thermal:** the leader runs hotter and slows under load (E13); the operator asked us to keep watching it (D8). No clock logging during serving yet.
-- The operator's `nvtop` was paused on both nodes on 2026-10-13. Current state not re-checked.
+- **Thermal:** the leader runs hotter and slows under load (E13); Velvet asked us to keep watching it (D8). No clock logging during serving yet.
+- Velvet's `nvtop` was paused on both nodes on 2026-10-13. Current state not re-checked.
 
 ## Artifacts
 
@@ -383,7 +383,7 @@ Tools are in `/srv/dsv4/run/tools/`, and experiment data is in `/srv/dsv4/run/da
 - **Clocks during decode:** leader 2483 MHz at 91% util and about 37 W; worker 2548 MHz at 89% util and about 36 W. In E07.0 both were 2093 MHz at about 20 W.
 - **Analysis:** three variables changed (clock cap, NIC port, profiler config), so the gain cannot be attributed with certainty. The clock is the likely cause [inferred]: a different port on the same NIC should not change latency, and an idle profiler config costs nothing. If so, a 19–22% SM clock rise bought only 5% decode. That means roughly a quarter of the step scales with SM clock, and the rest is bound by memory, communication or synchronisation [inferred].
 - **Correction to E07.2:** the "about 20 W at 90% util" reading was taken under the 2100 MHz cap, so it is weaker evidence of waiting than stated.
-- **Open:** why was `-lgc 0,2100` set (stability, power, or the operator's choice)? Keep the clocks uncapped or restore the cap? An A/B test with the cap restored, everything else the same, would isolate the clock effect.
+- **Open:** why was `-lgc 0,2100` set (stability, power, or Velvet's choice)? Keep the clocks uncapped or restore the cap? An A/B test with the cap restored, everything else the same, would isolate the clock effect.
 
 
 #### E07.5 — Decode step profile, 4K context [measured unless tagged] (2026-10-15)
@@ -454,7 +454,7 @@ Tools are in `/srv/dsv4/run/tools/`, and experiment data is in `/srv/dsv4/run/da
 - **Idle placement:** step start to first kernel 334 µs leader, 43 µs worker; small mid-step gaps 0.85–0.97 ms (0.3–0.5 ms in gaps over 50 µs); **tail gap (last kernel to next step) 0 µs on both ranks** (E07.5: 0.8–1.6 ms).
 - **NCCL:** 86–87 AllReduce bf16 RING_LL per step, median 15.4 µs leader / 22.8 µs worker. In this run the worker, not the leader, spends more time in NCCL (2.5 vs 1.6 ms), so the waiting side has swapped compared with E07.5 [inferred: whichever rank finishes its compute first waits at the AllReduce].
 - **Analysis:** this confirms the E07.6 inference. Async removed the tail gap entirely and cut GPU idle from 3–4 ms to about 1.1 ms per step; compute kernel times are unchanged within ±3%. The GPU is now busy about 97% of the step, so **further host/scheduling work has at most about 1 ms (3%) left to gain.** The remaining gap to the about 26 ms roofline estimate (E07.5) is about 12 ms, and it now lies almost entirely inside kernels: FP8 dense about 14.5 ms (largest), routed MoE 8.2–8.4, BF16 GEMV 4.1 (worst bandwidth efficiency), "other" 3.4, NCCL 1.6–2.5, attention 1.9. 38.1 ms ≈ 68% of the practical roofline [inferred, same assumptions as E07.5].
-- **Next candidates, updated:** (1) clock policy (pending the operator); (2) BF16 GEMV path, est. ≤2–3 ms if brought to about 200 GB/s; (3) DeepGEMM M=1 FP8 dense efficiency, est. ≤2–3 ms; (4) fusing "other" small kernels; (5) NCCL small-message tuning, ≤1 ms. Items 2–4 are kernel or code changes [hypothesis for all gain estimates].
+- **Next candidates, updated:** (1) clock policy (pending Velvet); (2) BF16 GEMV path, est. ≤2–3 ms if brought to about 200 GB/s; (3) DeepGEMM M=1 FP8 dense efficiency, est. ≤2–3 ms; (4) fusing "other" small kernels; (5) NCCL small-message tuning, ≤1 ms. Items 2–4 are kernel or code changes [hypothesis for all gain estimates].
 
 ### 2026-10-14 — Blocker: CX7 links have no IPv4 after reboot [measured]
 - Both nodes did a clean shutdown at about 22:26–22:27 on Oct 13. The worker came back at 22:29 and the leader at 23:06. At 22:26:53 the f1 ports went `Link down`.
@@ -466,12 +466,12 @@ Tools are in `/srv/dsv4/run/tools/`, and experiment data is in `/srv/dsv4/run/da
 ### 2026-10-15 — INV-2: why the CX7 link lost its IPs [measured, from journals on both nodes]
 | Time (PDT) | Node | Event |
 |---|---|---|
-| Oct 13 18:42 | leader | The operator session opened |
+| Oct 13 18:42 | leader | Velvet session opened |
 | 18:56:30–33 | worker | system powered off |
 | 18:56:34 | leader | both f1 links `Link down` |
 | 18:56:41 | leader | `Power key pressed short` → power off |
 | 19:11 / 19:16 | leader / worker | boot; f1 links up at 19:16 (cables on f1) |
-| 22:21–22:26 | both | new the operator sessions |
+| 22:21–22:26 | both | new Velvet sessions |
 | 22:26:49 | worker | `Power key pressed short` → power off |
 | 22:26:53 | leader | f1 links down |
 | 22:27:01 | leader | `Power key pressed short` → power off |
@@ -480,10 +480,10 @@ Tools are in `/srv/dsv4/run/tools/`, and experiment data is in `/srv/dsv4/run/da
 | 23:06 | leader | boot with f0 up, f1 NO-CARRIER |
 | Oct 15 00:22:52 | worker | `Power key pressed short` → power off; boot 00:23 |
 
-- **Cause:** someone physically present pressed the power buttons and re-cabled the nodes. They were not crashes; every shutdown is a clean `Power key pressed` poweroff. Between 22:29 and 23:06 the QSFP cables went into port 0 on both nodes. The operator had sessions open each time. Who acted is [inferred], not proven.
+- **Cause:** someone physically present pressed the power buttons and re-cabled the nodes. They were not crashes; every shutdown is a clean `Power key pressed` poweroff. Between 22:29 and 23:06 the QSFP cables went into port 0 on both nodes. Velvet had sessions open each time. Who acted is [inferred], not proven.
 - **Why the IPs are gone:** the static IPs are defined only in the netplan profiles for the f1 ports. The f0 ports are held by NetworkManager "Wired connection" DHCP profiles that stay stuck in `activating`, because there is no DHCP server on a point-to-point link.
 - **Links are healthy:** IPv6 link-local ping works on both planes (enp1s0f0 ↔ enp1s0f0 at 0.7–1.4 ms, enP2p1s0f0 ↔ enP2p1s0f0 at 1.3 ms). The pairing is the same as before; only the addresses are missing.
-- The operator's own `cx7-nccl-env.sh` notes that the cable has moved between f0 and f1 before. This setup has no persistent IPv4 config for f0.
+- Velvet's own `cx7-nccl-env.sh` notes that the cable has moved between f0 and f1 before. This setup has no persistent IPv4 config for f0.
 
 ### 2026-10-15 — INV-2 follow-up: first IP fix applied to the wrong node [measured]
 - The worker's nmcli commands were also run on the **leader**. Leader result: Wired connection 1 (enP2p1s0f0np0) = 192.168.201.11 (should be .10), and Wired connection 3 (bound to **enP7s7**, the 10GbE port, no carrier) = 192.168.200.11. The worker still has no CX7 IPv4.
@@ -499,19 +499,19 @@ Tools are in `/srv/dsv4/run/tools/`, and experiment data is in `/srv/dsv4/run/da
 - Memory again held about 90 GiB per node after `down` (MemFree 30–33 GiB). `gb10-reclaim` plus a tiny CUDA job restored it to 122–124 GiB.
 - Open item: `down` should stop the run's guard and observer processes. Today a manual cleanup is needed between runs.
 
-### 2026-10-16 — Run 20261016T0022Z ended: worker rebooted by the operator [measured]
-- 10:35:44 PDT: worker journal shows `sudo[170592]: <operator> : ... COMMAND=/usr/sbin/reboot`. The worker's vLLM logged "Parent process exited" at 17:35:45 UTC and its container exited 137 (not OOM). The worker was back up at 10:36.
+### 2026-10-16 — Run 20261016T0022Z ended: worker rebooted by Velvet [measured]
+- 10:35:44 PDT: worker journal shows `sudo[170592]: <collaborator> : ... COMMAND=/usr/sbin/reboot`. The worker's vLLM logged "Parent process exited" at 17:35:45 UTC and its container exited 137 (not OOM). The worker was back up at 10:36.
 - The leader did not detect the loss. Its API stayed up and requests hung: the E07.7 profile request at 10:44 PDT got no tokens, with leader GPU 0% at 13 W. The client was killed at 10:52. The leader needs `launch-dsv4.sh down`.
 - After the reboot, the worker's CX7 IPv4 came back automatically (NM profiles from 2026-10-15 persist). Leader↔worker ping is 0.3 ms. The clock cap is absent on the worker as well.
 - **E07.7 (profile with async on):** not captured; needs a fresh run.
   - *Update 2026-10-16:* captured on the next run; see E07.7.
 - The run was stable for 16 h, including the 1M request and both idle probes, until the external reboot.
 
-### 2026-10-16 — Why async scheduling was off: provenance [measured from the operator's files, read-only]
+### 2026-10-16 — Why async scheduling was off: provenance [measured from Velvet's files, read-only]
 - `/srv/dsv4/live/launch-dsv4.sh:80-81`: "Async scheduling is intentionally disabled while isolating the EngineCore/shared-memory deadlock." It was an isolation step during debugging, not a finding that async is unsafe.
-- The operator's upstream bug report (`live/diagnostics/upstream-bug-report-dspark-rank-divergence.md`) describes the deadlock: first-request TP rank divergence and hang with the rank-0 GPU wedged at 96%. It was seen with **DSpark on** and vLLM 0.25.2. The operator named DSpark as the strongest differentiator. Our E08 found a separate cause of shm-broadcast stalls (WiFi control plane), fixed in E09.
-- `live/dsv4_validate.py:110` requires `--no-async-scheduling` for the operator's approved live DSpark config. That validator applies to `live/`, not to our `run/` stack.
-- Implication: with DSpark off (our config), async passed 4K, 64K and 1M runs plus the 30/60-min idle probes during one 16 h run (E07.6). With DSpark on, async is untested and touches the exact path the operator was debugging, so it should not be combined with DSpark without a separate test.
+- Velvet's upstream bug report (`live/diagnostics/upstream-bug-report-dspark-rank-divergence.md`) describes the deadlock: first-request TP rank divergence and hang with the rank-0 GPU wedged at 96%. It was seen with **DSpark on** and vLLM 0.25.2. Velvet named DSpark as the strongest differentiator. Our E08 found a separate cause of shm-broadcast stalls (WiFi control plane), fixed in E09.
+- `live/dsv4_validate.py:110` requires `--no-async-scheduling` for Velvet's approved live DSpark config. That validator applies to `live/`, not to our `run/` stack.
+- Implication: with DSpark off (our config), async passed 4K, 64K and 1M runs plus the 30/60-min idle probes during one 16 h run (E07.6). With DSpark on, async is untested and touches the exact path Velvet was debugging, so it should not be combined with DSpark without a separate test.
 
 ### 2026-10-17 — Status check after about 14 h idle [measured]
 - At 09:32 PDT both containers had been up 14 h (the run from E07.7, async on, `DSV4_PROFILE=1`). Health 200, no ALERT on either node, worker up 22 h 56 m (no new reboot), leader GPU 0% at 2411 MHz, leader MemAvailable 22 GiB.
@@ -823,7 +823,7 @@ Then E12b is a serving test: a temperature-0 output comparison with the patch on
 - Memory bandwidth is identical, so the "memory contention" hypothesis in E13 is not supported.
 - With nothing else running, the leader is 2–4 % slower, which matches its lower clock at equal power and higher temperature.
 - In serving (E11/E11b) the per-chunk logits gap grew over the run: chunk step 1 +3 %, step 9 +6 %, step 18 +15.6 %. Standalone, the gap is about 3.5 % at both the 224K and the 1M shape, so it does not grow with context size. A gap that grows with time under load fits progressive thermal throttling on the leader (E13: 72 → 82 °C, SW thermal slowdown in 9 % of busy samples). Not proven: the standalone sustained test lasted 60 s, while a prefill lasts minutes.
-- Practical lever: leader cooling or airflow (physical check), or a clock cap that keeps both GPUs equal and cool (the operator's decision 1).
+- Practical lever: leader cooling or airflow (physical check), or a clock cap that keeps both GPUs equal and cool (Velvet's decision 1).
 
 ## 2026-10-19 — Worker-loss detection (staged)
 **Finding.** [measured, from code]
@@ -850,12 +850,12 @@ Then E12b is a serving test: a temperature-0 output comparison with the patch on
 - The live server stayed healthy (/health 200). The apply script was dry-run on copies: syntax OK, diff as intended. Not yet applied.
 - [measured] Applied by the user 2026-10-19 20:39 PDT (`syntax OK`, diff as intended; `dsv4-peerwatch.sh` installed). Takes effect at the next start.
 
-## 2026-10-20 — The operator's reply to the 2026-10-19 message [measured: the operator's text]
+## 2026-10-20 — Velvet's reply to the 2026-10-19 message [measured: Velvet's text]
 - Clock cap: leave uncapped while thermal throttling is not a problem; keep watching it (D8).
-- DSpark: the rank-divergence deadlock and prefill at large contexts are still issues. The operator thinks the WiFi-roaming hangs are not the main DSpark problem and suspects TP=2 and GB10 compatibility. Go ahead when ready, after reviewing the PRs against vLLM main that tried to fix this and why they were not merged (D10).
+- DSpark: the rank-divergence deadlock and prefill at large contexts are still issues. Velvet thinks the WiFi-roaming hangs are not the main DSpark problem and suspects TP=2 and GB10 compatibility. Go ahead when ready, after reviewing the PRs against vLLM main that tried to fix this and why they were not merged (D10).
 - Patches: may be on by default; also see whether they can be merged into vLLM main so they are not bespoke to one model; read vLLM's CONTRIBUTING.md before opening anything (D9).
-- The operator asks that the technical details of each change be understood well enough to explain (needed for upstream PRs).
-- Next project queued by the operator: inference stability for another model. Not started.
+- Velvet asks that the technical details of each change be understood well enough to explain (needed for upstream PRs).
+- Next project queued by Velvet: inference stability for another model. Not started.
 
 ## E14 — Re-profile at 256K with the split indexer ON (2026-10-20) · COMPLETE
 **Setup.** Run dsv4-t2-20261020T225038Z-724557, started by the user with `DSV4_IDX_SPLIT=1 DSV4_PROFILE=1`. [measured] The patched `sparse_attn_indexer.py` is mounted in both containers (md5 ffcdc4a05c6e…); profiler config as E11 (torch, delay 10 / max 20 iterations). Method as E11: `POST /start_profile`, then `tools/run-guarded.sh 262144`.
@@ -900,11 +900,11 @@ Notes: `reports/research_notes/vLLM upstream patches/notes.md` (every claim tagg
 
 ## 2026-10-20 — DSpark upstream survey (research, read-only) and a GB10 prefill-hang fix our image lacks
 Notes: `reports/research_notes/DSpark upstream survey/notes.md`. Below, "[measured]" means checked by me in the running container or via the GitHub API; the rest is from the notes.
-- [measured] vLLM #51538 "[Bugfix] Make DSV4 sparse MLA work end-to-end for plain decode, MTP, and DSpark" was merged 2026-08-15. [from notes] It is in our image (vLLM `0.26.1rc1.dev1219+g46638857f`) but not in Anemll's `dspark-vllm-gx10:0.1.1` (vLLM 0.25.2.dev0). The operator's backport PR to Anemll (#12) is unreviewed; that repo is inactive. [measured] Our image's DSpark code is in `vllm/v1/worker/gpu/spec_decode/dspark/`.
-- [from notes] PRs still open that bear on TP rank divergence: #56831 / #62769 (adaptive-verification sync), #49027 (cross-rank agreement before drafting), #50843 (out-of-vocabulary sampled token), #52499 (GB10 spec-decode shapes, waits for FlashInfer #4802), #52292 (autotune hang at multi-node start). There is no general TP consensus guard in vLLM. Clue from the operator's 660K incident: rank 0 alone did one extra logits gather of 6 × 64,640 elements, i.e. one rank took a drafting branch the other did not.
+- [measured] vLLM #51538 "[Bugfix] Make DSV4 sparse MLA work end-to-end for plain decode, MTP, and DSpark" was merged 2026-08-15. [from notes] It is in our image (vLLM `0.26.1rc1.dev1219+g46638857f`) but not in Anemll's `dspark-vllm-gx10:0.1.1` (vLLM 0.25.2.dev0). Velvet's backport PR to Anemll (#12) is unreviewed; that repo is inactive. [measured] Our image's DSpark code is in `vllm/v1/worker/gpu/spec_decode/dspark/`.
+- [from notes] PRs still open that bear on TP rank divergence: #56831 / #62769 (adaptive-verification sync), #49027 (cross-rank agreement before drafting), #50843 (out-of-vocabulary sampled token), #52499 (GB10 spec-decode shapes, waits for FlashInfer #4802), #52292 (autotune hang at multi-node start). There is no general TP consensus guard in vLLM. Clue from Velvet's 660K incident: rank 0 alone did one extra logits gather of 6 × 64,640 elements, i.e. one rank took a drafting branch the other did not.
 - [measured] FlashInfer #4732 "[bug fix] Issue 3700 sparse mla sm121 hang" was merged 2026-09-01. Issue #3700 is a flaky timeout of `test_sparse_mla_sm120` on Spark. The fix changes the producer/consumer named-barrier handshake in `sparse_mla_sm120/prefill_kernel.cuh` to alternate between two barrier IDs (`bar_sync_alt` / `bar_arrive_alt` in `arch/barrier.cuh`); arriving twice in one phase desynchronised the barrier.
 - [measured] Our image's FlashInfer is `0.6.18.dev20260819` and does **not** have this fix: `barrier.cuh` has no `bar_sync_alt`, and `prefill_kernel.cuh` still uses the single-ID `bar_sync_t<1>` / `bar_arrive_t<1>` (lines 157, 522, 785, 826, 1517). That file defines `sparse_mla_prefill_mg_dual_kernel`, the sparse MLA prefill kernel in all our E11 / E14 traces.
-- [inferred] Our DSpark-off serving runs the kernel with the known GB10 hang bug. It has not hung in our runs so far, but a hang would show as a GPU stuck busy (the 96 % wedge class) with the other rank waiting at a collective. It is a stability fix (G1) independent of DSpark, and it may also explain part of the operator's "prefill at large context" problem [hypothesis].
+- [inferred] Our DSpark-off serving runs the kernel with the known GB10 hang bug. It has not hung in our runs so far, but a hang would show as a GPU stuck busy (the 96 % wedge class) with the other rank waiting at a collective. It is a stability fix (G1) independent of DSpark, and it may also explain part of Velvet's "prefill at large context" problem [hypothesis].
 
 ## E15 — FlashInfer #4732 backport: sparse MLA SM120/121 prefill hang fix (2026-10-20) · SUCCESS (offline test and serving check pass)
 **Facts.** [measured]
@@ -969,8 +969,8 @@ SASS check of the prefill kernels (`cuobjdump -sass`; arrive instructions counte
 ## 2026-10-21 — Housekeeping: fstrim guard fix, thermal logging, nvtop
 - **fstrim false alerts.** [measured] The leader's ALERT snapshot from 2026-10-19 (`runs/…445582/leader/snapshot.json`) lists one D-state PID, 489943. The journal shows `fstrim[489943]` ran 00:58:40–01:00:26. Fix staged as `scratchpad/apply-guard-fstrim.sh`: `D_STATE_IGNORE = {"fstrim"}`, matched on the exact `comm` from `/proc/PID/stat`. Tested on a fake `/proc`: fstrim in D is ignored, while a kworker in D and a process whose comm contains "fstrim)" are still reported. Not applied. Takes effect for guards started after it (the launcher copies the guard to the worker at each start).
 - **Thermal logging (D8).** `tools/thermlog.sh` (nvidia-smi every 30 s: clocks, power, temperature, utilisation, `clocks_event_reasons`), one instance per host. Started 2026-10-21 21:48 on the leader (`data/thermal/`) and the worker (`~/dsv4-thermal/`). Summary: `tools/thermsum.py`.
-- **nvtop.** [measured] the operator's nvtop (PID 78955, state Sl+) is running on the leader, not paused; none on the worker.
-- **Message to the operator** drafted: `reports/Message to the operator 2026-10-21.md`.
+- **nvtop.** [measured] Velvet's nvtop (PID 78955, state Sl+) is running on the leader, not paused; none on the worker.
+- **Message to Velvet** drafted: `reports/Message to Velvet 2026-10-21.md`.
 
 ## E16 — Backport of upstream indexer row sharding (vLLM #54951 + #61647) · PORTED, not run (2026-10-21)
 Work dir: `scratchpad/upsplit/` (`PORT.md` = per-hunk notes, `port-combined.diff`, `tree/` git repo with commits base → port 54951 → port 61647, tests).
@@ -1006,7 +1006,7 @@ Run `dsv4-t2-20261021T005449Z-775571` (up since 2026-10-20 17:55 local).
   - Then wpa_supplicant, tailscaled, cups-browsed, rfkill_poll and the Ethernet `rtl8127_esd_task` (blocked in `rtnl_lock`) pile up behind it.
   - The work being cancelled presumably needs the wiphy mutex itself, i.e. a self-deadlock [hypothesis: an mt7925 driver bug, not checked upstream].
 - **Guard:** the leader guard alerted `D-state>10s` at 10:25:53 (the stuck PIDs are the kworkers above). Alerting does not abort, so serving continued. vLLM uses CX7 (D6), which is not affected.
-- **Recovery:** [measured] logind logged "Power key pressed short" at 17:20:11, i.e. a physical power-button shutdown. The operator logged in over tailscale at 17:21. [inferred] Remote access was dead, since tailscaled was itself stuck on the lock.
+- **Recovery:** [measured] logind logged "Power key pressed short" at 17:20:11, i.e. a physical power-button shutdown. Velvet logged in over tailscale at 17:21. [inferred] Remote access was dead, since tailscaled was itself stuck on the lock.
 - **Orphan worker** [measured, 2026-10-23 09:22]: container `dsv4-worker` is still Up. `VLLM::Worker_TP1` (PID 810281) holds 93.6 GiB and logs TCPStore "Broken pipe" to 192.168.200.10:25000 every second (113k lines). Peerwatch runs on the leader only, so nothing tears the worker down when the leader dies.
 - **Exposure:** the leader is back on the same 6 GHz AP (channel 165, 6775 MHz), so this can recur. The worker's mt7925 had a firmware message timeout and reset on 2026-10-21 19:46 (no deadlock).
 - **Next:** (1) stop the orphaned worker container and reclaim its memory; (2) keep the leader's WiFi off 6 GHz or roaming, or put management on wired Ethernet; (3) give the worker a leader-loss watchdog; (4) check upstream for an mt7925 `roc_abort_sync` deadlock fix.
@@ -1088,7 +1088,7 @@ Run `dsv4-t2-20261023T162854Z-14489`, launched 09:28:55 local on default setting
   - **Worker sar:** CPU 99.2 % idle and about 24.4 GiB free memory, flat at 19:10, 19:20 and 19:30.
   - **Leader kernel:** CX7 link down at 19:33:47, which is the worker power-off. Nothing before that.
 - **[inferred]** The model and the worker did not crash. The outage was the short power-button press, which systemd-logind handles as a power-off by default.
-- **[inferred]** The worker had no internet since 10:24:13 (WiFi `no-secrets`; ubuntupro at 18:51: `Temporary failure in name resolution`), so the operator saw it offline over Tailscale for about 9 h. That is a likely reason it looked crashed. It came back online at 19:34:41 after the reboot.
+- **[inferred]** The worker had no internet since 10:24:13 (WiFi `no-secrets`; ubuntupro at 18:51: `Temporary failure in name resolution`), so Velvet saw it offline over Tailscale for about 9 h. That is a likely reason it looked crashed. It came back online at 19:34:41 after the reboot.
 - The earlier real failures (I01: leader mt7925 WiFi deadlock; I02: boot-time memory wedge) are different mechanisms and are unaffected by this.
 - Prevention options (root; for the user to decide):
   1. A wired network cable, or the WiFi secret stored system-wide, so the worker does not drop off Tailscale.
@@ -1316,7 +1316,7 @@ Backups of the launchers are `*.bak-20261024T114923` (node-launch.sh, launch-dsv
 - **Open discrepancy:** 1M TTFT 866.0 s is 6.4 % above E12b (813.7 s) and 5.7 % above E15 (819.2 s). Those used e12b_client.py, a different prompt and 1,036,267 tokens.
   - [inferred] The 1 % extra tokens explains about 16 s at most (E11 chunk model: about 13 s per extra chunk at 1M prefix), which leaves about 35 s unexplained.
   - [hypothesis] Candidates: the client/prompt difference, leader thermal state after 26 h, or cross-boot variance. A same-boot e12b_client 1M run would separate them.
-- Thermal logging (tools/thermlog.sh) is **not running**. The last file is spark-61dd-20261022.csv; it presumably stopped with the I01 leader power-off on 2026-10-22 and was never restarted. So there is no thermal data for F01, F02 or this benchmark. The operator's D8 condition (watch throttling with clocks uncapped) has not been met since 2026-10-22.
+- Thermal logging (tools/thermlog.sh) is **not running**. The last file is spark-61dd-20261022.csv; it presumably stopped with the I01 leader power-off on 2026-10-22 and was never restarted. So there is no thermal data for F01, F02 or this benchmark. Velvet's D8 condition (watch throttling with clocks uncapped) has not been met since 2026-10-22.
 - **GEMV drift check:** `gemv-acc.py run patch-on-26h 1` (14:17), compared with the 2026-10-24 11:52 patch-on run on the same boot:
   - accuracy 41/52 in all 3 passes;
   - greedy tokens identical 54/54;
@@ -1345,7 +1345,7 @@ Backups of the launchers are `*.bak-20261024T114923` (node-launch.sh, launch-dsv
 - **Inference probe** (tools/infer-probe.py, 30-min interval, 128 greedy tokens): **66/66 OK** from 10-24 11:16 to 10-25 19:45, with one 29-min gap at the 20:15 restart. Median 26.02 tok/s end-to-end (25.91–26.21 excluding two outliers):
   - 10-24 12:16, 8.67 tok/s, cause unknown;
   - 10-25 14:15, 1.11 tok/s, queued behind the final benchmark's 1M request.
-- **Load during the soak:** the final benchmark (4K–1M, 13:57–14:17), the GEMV pass and any the operator traffic (not measured).
+- **Load during the soak:** the final benchmark (4K–1M, 13:57–14:17), the GEMV pass and any Velvet traffic (not measured).
 - **Verdict:**
   - [measured] The model served without interruption for the whole window (35 h of uptime at the time of writing). No serving fault, memory distress or kernel error was recorded.
   - [inferred] Both monitor stops were monitoring artefacts, not model or host faults. Each has been fixed: stale-watcher retirement in the launcher, and the 45 s D-state rule in soak.sh.
@@ -1378,7 +1378,7 @@ Every boot also gets `tools/boot-4k.sh <label>` (new: warm-up + 4K ×3 via run-g
 - [hypothesis] A worker-side stall around the WiFi roam (for example a DNS or logind delay in SSH session setup, even though the TCP path is CX7) made a bounded remote call time out. Not shown; the fail message is needed.
 
 ### R01.1: boot with the GEMV patch off, 2026-10-26 [measured]
-- Attempt 3 (run dsv4-t2-20261026T163651Z-704748, DSV4_PATCH=0) waited 09:36–10:19 at the confirmation prompt. The operator confirmed at about 10:19. The operator was informed of the outage, which had lasted since 2026-10-25 22:39.
+- Attempt 3 (run dsv4-t2-20261026T163651Z-704748, DSV4_PATCH=0) waited 09:36–10:19 at the confirmation prompt. The operator confirmed at about 10:19. Velvet was informed of the outage, which had lasted since 2026-10-25 22:39.
 - During the start, a watcher (2 s interval) measured SSH from the leader to the worker over CX7 at 0.31–0.47 s on every sample, with the worker WiFi steady on <bssid>. Before the confirmation, 600 samples (09:37–10:00) were also all ~0.3 s. [inferred] The 2026-10-25 22:45 stall was transient; its cause is still unidentified (see attempt 2).
 - API healthy at 10:23:55, post-load reclaim done at 10:23:47; launcher completed with peerwatch and leaderwatch running and no ALERT.
 - Verified from the container mounts: no `dsv4-attention.py` on either rank, so the GEMV patch is off. Split indexer and FI4732 are mounted on both ranks.
@@ -1433,7 +1433,7 @@ Every boot also gets `tools/boot-4k.sh <label>` (new: warm-up + 4K ×3 via run-g
 
 ### R01.3: diagnostics off, 2026-10-26 11:51–12:00 [measured]
 - Run dsv4-t2-20261026T185118Z-789739, DSV4_DIAG=0, otherwise defaults (GEMV patch, split indexer, FI4732 all mounted). Both containers run with NCCL_DEBUG=WARN and no TORCH_NCCL_DESYNC_DEBUG.
-- **No boot stall:** peak leader PSI 14.3 (watcher), healthy at 11:55:44, post-load reclaim 11:55:41, peerwatch and leaderwatch running, no ALERT. This boot is now serving the operator.
+- **No boot stall:** peak leader PSI 14.3 (watcher), healthy at 11:55:44, post-load reclaim 11:55:41, peerwatch and leaderwatch running, no ALERT. This boot is now serving Velvet.
 - `boot-4k.sh diag-off`: decode median **26.86 tok/s** (26.86, 26.86, 26.96), TTFT 1.7 s.
 - **Interpretation:**
   - [inferred] Diagnostics-on boots range 26.89 (F01), 26.93 (E07.8) and 27.20–27.26 (F02 boot). The diag-off boot sits inside or below that range. NCCL INFO logging emits roughly one line per step outside CUDA graphs (E07.1), so a real slowdown from turning it *off* is implausible. **Diagnostics overhead: not measurable (< the ~1.5 % boot-to-boot spread).**
@@ -1482,7 +1482,7 @@ Every boot also gets `tools/boot-4k.sh <label>` (new: warm-up + 4K ×3 via run-g
 - Note: the 1M TTFT here (820 s, e12b_client) and the final benchmark's 866 s (ctxbench) use different clients and prompts. The "open gap vs E12b" in the final report is therefore a client/prompt difference, not a regression, at least for split + FI4732 vs E15 [inferred; to be checked against the final benchmark's notes].
 
 ### R01.6: back to full defaults; second boot with the compaction helper (2026-10-26 16:04–16:12) [measured]
-- 14:47 the rowshard run was stopped by `launch-dsv4.sh down` (both containers exit 0; ALERT latched as designed). The alert clears and restart did not follow until ~16:04, so the **model was offline for the operator from 14:47 to 16:10 (~1 h 23 min)**. Operator delay, no fault.
+- 14:47 the rowshard run was stopped by `launch-dsv4.sh down` (both containers exit 0; ALERT latched as designed). The alert clears and restart did not follow until ~16:04, so the **model was offline for Velvet from 14:47 to 16:10 (~1 h 23 min)**. Operator delay, no fault.
 - Run dsv4-t2-20261026T230446Z-926391, full defaults (DSV4_DIAG=1; dsv4-attention.py (GEMV), dsv4-sparse-attn-indexer.py (split) and the FI4732 .so mounted). Serving at 16:10:03, about 5 min 20 s after launch. Peerwatch and leaderwatch running; no ALERT.
 - **No stall again:** peak memory PSI some avg10 was 7.98 on the leader and 26.46 on the worker. The worker spent 4 s above 20 at 16:09:51, around the post-load reclaim, with only 8 free order ≥ 9 blocks. The helper correctly did not act (< 6 s) and exited on serving on both nodes. **The helper is now 2/2 clean runs, but its stall path is still unexercised.**
   - [hypothesis] The worker's brief spike at the post-load point appears on both helper boots (20.7, 26.5). Watch whether the worker ever crosses the 6 s trigger.
@@ -1495,7 +1495,7 @@ Every boot also gets `tools/boot-4k.sh <label>` (new: warm-up + 4K ×3 via run-g
 
 ### Handover documents, 2026-10-26 17:xx
 - **`reports/DSV4 final report.md` v1.0** written from this log. It supersedes the draft, which stays in git history (removed from the tree; the original remains in ~/reports).
-- **`reports/Message to the operator 2026-10-26 handover.md`** written: what is serving, expected speeds, start/stop/clear, failure handling, changes since 2026-10-21, and four decisions for the operator (DSpark, leader cooling, wired network, upstreaming).
+- **`reports/Message to Velvet 2026-10-26 handover.md`** written: what is serving, expected speeds, start/stop/clear, failure handling, changes since 2026-10-21, and four decisions for Velvet (DSpark, leader cooling, wired network, upstreaming).
 - README updated: results note on the two 1M clients, GEMV +1.5–3.3 %, boot stall and boot spread under known issues, E16 result in the upstream table, `DSV4_BOOT_COMPACT` in the configuration table. `docs/operations.md`: boot-stall handling in the alert table.
 - **Correction to R01.3:** with R01.6 (26.78) the patch-on 4K range is 26.78–27.26 (1.8 %), so the GEMV patch effect is **+1.5 % to +3.3 %** (patch off 26.38), not +1.8 % to +3.3 %.
 - `tools/commit-snapshot.sh` now copies the log, the final report and the handover note.
@@ -1540,12 +1540,12 @@ Two read-only reviews checked the docs against the code and log, and the code co
   - duplicated prompt code in e12b_client;
   - small guard refactors;
   - hard-coded peer IPs alongside `$PEER`;
-  - the HF cache path under `/home/<operator>`;
+  - the HF cache path under `/home/<collaborator>`;
   - the WiFi SSID in `tools/soak.sh` and `setup/worker-wifi-keepalive.sh`, which should be removed before any public release.
 - **Not yet exercised:** the edited launcher, abort and node-launch paths run only on the next start, stop or abort; the next boot validates them.
 
 ## 2026-10-26 — GitHub export preparation (autonome-research/dsv4-spark-1m)
-- [measured] The user logged `gh` in as `<github-account>`, a member of `autonome-research`. Decisions by the user: repo `dsv4-spark-1m`, **private first**, the operator messages left out, licence Apache-2.0.
+- [measured] The user logged `gh` in as `<github-account>`, a member of `autonome-research`. Decisions by the user: repo `dsv4-spark-1m`, **private first**, Velvet messages left out, licence Apache-2.0.
 - Source changes, committed to the local repo:
   - `setup/worker-wifi-keepalive.sh` takes the NetworkManager connection name as its argument instead of hard-coding the SSID. The generated `/usr/local/sbin/wifi-keepalive` is equivalent to the installed one: diffed, only the quoting style of `CON=` differs. The installed timer on the worker is unchanged.
   - `tools/soak.sh` logs the pinned BSSID only when `SOAK_WIFI_CON` is set.
@@ -1555,7 +1555,7 @@ Two read-only reviews checked the docs against the code and log, and the code co
 - The GitHub copy is a fresh tree with no local history, because the local history contains the handover note. `tools/export-github.sh` builds it and redacts the WiFi SSID and BSSID/MAC addresses in `reports/*.md` of the export only. This log itself is not redacted.
 - **Sensitive-information pass on the GitHub copy** (user request "make sure it does not contain any sensitive information"):
   - [measured] A scan of the first copy found: the operator's and the user's account names (about 60 mentions), the user's e-mail, the GitHub account name, router brands, an unrelated internal project, and the `/home/<operator>` cache path. It also found the export tools themselves, which contain those strings as patterns.
-  - `tools/export-redact.py` now replaces them in the copy: people become roles ("the operator", "the user account"), plus `<author email>`, `<github-account>`, "an ISP gateway / a mesh router" and "another model". The benchmark word lists in `ctxbench.py`/`e12b_client.py` keep the ordinary word "the operator", so the exported prompts are byte-identical.
+  - `tools/export-redact.py` now replaces them in the copy: people become roles ("the operator", "the user account"), plus `<author email>`, `<github-account>`, "an ISP gateway / a mesh router" and "another model". The benchmark word lists in `ctxbench.py`/`e12b_client.py` keep the ordinary word "Velvet", so the exported prompts are byte-identical.
   - `.gitattributes` marks `tools/export-github.sh`, `tools/export-redact.py` and itself `export-ignore`, so they are not in the copy.
   - Export commits use the GitHub no-reply address of the pushing account, not a personal e-mail.
   - `node-launch.sh` takes the HF cache path from `DSV4_HF_CACHE`. The default is unchanged, so serving behaviour is unchanged; it takes effect at the next start.
@@ -1600,4 +1600,20 @@ Two read-only reviews checked the docs against the code and log, and the code co
   - Boot-to-boot spread: 1.8 % → **2.1 %** (26.69–27.26).
   - GEMV gain range (against the patch-off boot at 26.38): +1.5–3.3 % → **+1.2–3.3 %**.
   - Updated in README, `docs/patches.md`, the handover note and the final report, which is now **v1.1** with a change note at the end. v1.1 also records the helper's first real intervention: it meets the report's success criterion once; one case, not proof. The earlier figures were correct for the five boots then measured.
-- **Handover note withdrawn** (user: the handover goes out as an e-mail instead). `~/reports/Message to the operator 2026-10-26 handover.md` was moved to `/srv/dsv4/run/.backups/` (git-ignored, recoverable). The open decisions are left out of the e-mail for now, at the user's request. `docs/operations.md` no longer mentions the note.
+- **Handover note withdrawn** (user: the handover goes out as an e-mail instead). `~/reports/Message to Velvet 2026-10-26 handover.md` was moved to `/srv/dsv4/run/.backups/` (git-ignored, recoverable). The open decisions are left out of the e-mail for now, at the user's request. `docs/operations.md` no longer mentions the note.
+
+## 2026-10-26 — Research paper draft v0.1
+- `reports/DSV4 research paper.md` written from the final report v1.1 and this log (user request). Sections: abstract, introduction, system, method, time breakdown, optimisations, results, reliability, discussion, limitations, future work, artefacts and configuration appendices. The author line is left as a placeholder; it includes an AI-assistance statement.
+- Every number was checked against its log entry before commit. Corrections made during that check:
+  - the profiler slowdown is given as the measured 162.8 vs 143.9 s instead of an unsourced range;
+  - the 256K "start" TTFT is marked as e12b_client with the split off;
+  - the 1M memory minimum is attributed to the final configuration;
+  - the list of service interruptions includes the operator reboot and the power-button press.
+- `commit-snapshot.sh` now also copies the paper; the README links it.
+- Renamed to `reports/DSV4 research report.md` (user request); the wording "this paper" is now "this report".
+- **Correction:** the user asked not to commit the report. Local commits e168239 and de505ae were undone (`git reset --mixed 9dab2e1`; neither was pushed or exported). The report exists only as `~/reports/DSV4 research report.md`; `commit-snapshot.sh` and the README do not reference it. The two statements above about the snapshot script and the README link no longer hold.
+- **Naming** (user: "Velvet is a collaborator — name them accordingly everywhere"; the user chose "Velvet (collaborator)" for public material):
+  - The GitHub export now keeps the name Velvet, capitalised, instead of "the operator". Velvet's login in a journal line and the home path stay redacted as `<collaborator>`.
+  - README, final report and research report now introduce Velvet as our collaborator, who owns and operates the nodes.
+  - Generic "operator" wording in scripts and the runbook means whoever runs the start and is unchanged.
+  - This log keeps its original lowercase "Velvet" (not rewritten); the export capitalises it.
