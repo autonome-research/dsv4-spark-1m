@@ -1564,3 +1564,35 @@ Two read-only reviews checked the docs against the code and log, and the code co
 - [measured] **Published.** The user asked to "make it public". `gh repo create autonome-research/dsv4-spark-1m --public` created https://github.com/autonome-research/dsv4-spark-1m and pushed export commit ba862ff (77 files, source commit f98e937), authored with the <github-account> no-reply address. Topics: vllm, deepseek, dgx-spark, gb10, llm-inference, long-context.
 - To update it: commit locally, run `tools/export-github.sh "message"`, review the commit, then `git -C ~/dsv4-spark-1m-export push`.
 - README: new section "Reusing this work" (user request). It covers licence terms, what the patches are tied to (vLLM 46638857fdbb, DeepSeek-V4, SM12x), a per-patch table of who can use it, and what to adapt to run the stack on another pair of DGX Sparks.
+
+## 2026-10-26 — Non-disruptive check of the unexercised changes (user: "check now")
+- [measured] Boot-compact on the current run (926391): both helpers started at 16:05 and exited on serving at 16:10 with reclaims=0. The worker crossed the trigger once: PSI 26.46 for 4 s at 16:09:51, below the 6 s window. Leader peak PSI was 7.98.
+- [measured] Simulated stall (scratch state, PSI file 75 for 16 s, stub reclaim): reclaim #1 fired 6 s after the rise, PSI fell, and the helper exited on serving with reclaims=1. A real stall is still needed to show that `gb10-reclaim` itself releases one.
+- [measured] Every shell script passes `bash -n`, and the Python files compile. `sudo -n -l` allows `gb10-reclaim` on both nodes; the command was listed, not run.
+- [measured] The stop_guards pattern matches exactly the live guard of this run on each node and matches nothing for a different run id.
+- [measured] `cx7-nccl-env.sh` gives `NCCL_SOCKET_IFNAME=enP2p1s0f0np0` on both nodes, so the new node-launch CX7 check would pass.
+- [measured] The `DSV4_HF_CACHE` default resolves to the same path both live containers mount.
+- Not testable without a restart: the full start/stop/abort sequence with the edited scripts. That is deferred to the next planned restart, to avoid an outage.
+
+## R02 — Restart with the cleaned-up scripts; first real boot-compact intervention (2026-10-26 21:50) · SUCCESS
+- **Why:** validate the edited launcher, abort, node-launch and `DSV4_HF_CACHE` paths end to end (user: "restart now"). No requests were running or waiting beforehand (`/metrics`).
+- **Sequence:** the user ran `down`, cleared both alerts and started `start-dsv4-default.sh`. Run dsv4-t2-20261027T045050Z-1029193: start 21:50:50, post-load reclaim 21:56:15, **serving 21:56:40** (about 6 min).
+- [measured] **The boot-compact helper intervened for the first time on a real boot.** Leader log:
+  - 21:56:20: PSI some 26.67 with **0** free order ≥ 9 blocks.
+  - 21:56:27: reclaim #1 at PSI 41.25 (above the guard's 40 threshold).
+  - 21:56:28: done rc=0 in 1 s, MemAvailable 22 GiB, high-order blocks **1821**. PSI avg10 still read 41.75 because it lags.
+  - 21:56:36: back below 20 after 16 s.
+  - 21:56:38: serving, exit (reclaims=1).
+
+  The worker did not trigger (peak PSI 12.8). The guard did not abort: PSI was above 40 for at most about 10 s, well short of its 30 s window.
+- [inferred] This matches the I02 stall onset (PSI rising, no high-order blocks right after KV allocation). The reclaim restored high-order memory and pressure fell within about 8 s. Whether this boot would have stalled long enough to abort without the helper cannot be known from one case. This is the first evidence that the helper acts at the right moment and that its reclaim works.
+- [measured] **Edited scripts:**
+  - start, node-launch (with the CX7 check and the `DSV4_HF_CACHE` default) and the launcher worked;
+  - one guard per node, for the new run only; the old run's guards were stopped;
+  - peerwatch and leaderwatch are running;
+  - all `.err` files are empty;
+  - the HF cache mount is unchanged.
+
+  The abort path was not exercised (no abort happened).
+- [measured] Thermal loggers on both nodes kept running across the server restart. The handover note wrongly said they do not, and is corrected; `docs/operations.md` already says "does not survive a reboot", which is correct.
+- [measured] Per-boot 4K check (`data/RESTART/*-r02-cleanup-scripts/`): decode median **26.69** tok/s (26.66–26.73), TTFT 1.7 s. That is 0.3 % below the earlier boot range 26.78–27.26 and within the 1.8 % boot-to-boot spread [inferred: no regression from the script changes, none of which touch the serving path].
