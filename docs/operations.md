@@ -259,4 +259,4 @@ motivated the change.
 | `/srv/dsv4/diagnostics/<host>/` | NCCL logs and profiler traces |
 | `/srv/dsv4/runtime-cache/46638857-fi0618-sm121/` | Persisted TileLang/Triton caches (removes first-request JIT delay) |
 | `data/thermal/` | Thermal logs (`<host>-<date>.csv`; worker files copied from `gx10:~/dsv4-thermal/`) |
-| `~/reports/` | Canonical optimisation log and final report (the operator handover note is kept there, not in git) |
+| `~/reports/` | Canonical optimisation log and final report |

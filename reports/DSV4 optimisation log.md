@@ -1600,3 +1600,4 @@ Two read-only reviews checked the docs against the code and log, and the code co
   - Boot-to-boot spread: 1.8 % → **2.1 %** (26.69–27.26).
   - GEMV gain range (against the patch-off boot at 26.38): +1.5–3.3 % → **+1.2–3.3 %**.
   - Updated in README, `docs/patches.md`, the handover note and the final report, which is now **v1.1** with a change note at the end. v1.1 also records the helper's first real intervention: it meets the report's success criterion once; one case, not proof. The earlier figures were correct for the five boots then measured.
+- **Handover note withdrawn** (user: the handover goes out as an e-mail instead). `~/reports/Message to the operator 2026-10-26 handover.md` was moved to `/srv/dsv4/run/.backups/` (git-ignored, recoverable). The open decisions are left out of the e-mail for now, at the user's request. `docs/operations.md` no longer mentions the note.
