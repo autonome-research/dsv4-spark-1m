@@ -364,7 +364,8 @@ spread and should not be attributed to a change.
   intervention (R02) one reclaim restored the free high-order memory and the boot
   served; one case, so not yet proof. Root cause not established.
 - **Boot-to-boot speed spread**: an unchanged configuration gives 26.7–27.3 tok/s
-  at 4K on six boots (2.1 %); within a boot the spread is ≤ 0.2 tok/s.
+  at 4K over eight patch-on boots (2.1 %); within a boot, three warm requests vary
+  by 0.1–0.3 tok/s.
 - **Leader runs hotter** than the worker (+8 °C, SW thermal slowdown in 9 % of busy
   samples). Airflow has not been checked physically.
 - **WiFi**: the leader's BSSID pin does not stop roaming between the two routers.

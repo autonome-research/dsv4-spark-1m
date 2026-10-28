@@ -1617,3 +1617,18 @@ Two read-only reviews checked the docs against the code and log, and the code co
   - README, final report and research report now introduce Velvet as our collaborator, who owns and operates the nodes.
   - Generic "operator" wording in scripts and the runbook means whoever runs the start and is unchanged.
   - This log keeps its original lowercase "Velvet" (not rewritten); the export capitalises it.
+- Renamed `~/reports/DSV4 research report.md` → `~/reports/DSV4 report.md` (user: "it is just a report, not research; only the format is"). Still not committed.
+- `DSV4 report.md`: Velvet added as co-author (user request). The acknowledgement became an "Author contributions" paragraph. Not committed.
+
+### 2026-10-27 — Results check before posting to vLLM; correction of boot counts [measured]
+- **Upstream state** [measured: GitHub API]: #54951 and #61647 are merged (2026-10-11, 2026-10-15). Open #63956 (ZJY0516, "Token-sharded sparse-MLA prefill under TP; remove indexer row sharding") deletes `PrefillRowShard`, `balanced_prefill_row_shard` and `row_shard_sizes` and deprecates `indexer_tp_shard_min_rows`. Its ShardQ replacement runs only for callers that pass `shardq_layer_name`; the diff does not touch `vllm/models/deepseek_v4/`, which uses the shared `SparseAttnIndexer` [inferred from the diff: DeepSeek-V4 at TP > 1 would lose row sharding with no replacement]. Open #62956 (SM121 TP=2 skinny-GEMM plans, GLM-5.3-Flash) independently measures cuBLAS BF16 GEMV at 162–176 GB/s on GB10, matching E07.8. The CuTe skinny GEMM returns only BF16/FP16, while the DSV4 compressor needs fp32 output, so it cannot replace our patch directly. Main's DSV4 compressor call sites (`attention.py` `torch.mm(..., out_dtype=torch.float32)`) are unchanged, so the patch still applies. No open issue or PR covers the DSV4 compressor GEMV.
+- **E16 re-checked against raw JSON** [measured]: rowshard 29.1 / 134.4 / 820.3 s, E15 split 29.9 / 134.9 / 819.2 s, E12b replicated 1M 1,010.3 s; same client, same 1,036,267-token prompt, code found in all. Row sharding did engage at `indexer_tp_shard_min_rows` 8192: 1M is −18.8 % against replicated. E12b already had async scheduling and uncapped clocks; it predates FI4732 (no speed effect, E15).
+- **GEMV accuracy re-run offline** from the saved files (`gemv-acc.py compare`): 41/52 in all four passes, 52/54 token-identical, mean |Δlogprob| 0.00431. Reproduces.
+- **Correction (boot counts)** [measured]: the ranges were right but the counts were wrong.
+  - Patch-on 4K boots: **eight**, not six (E07.8 26.93, E10 26.75, F01 26.89, F02 27.20–27.26, R01.3 26.86, R01.5 26.86, R01.6 26.78, R02 26.69); range 26.69–27.26 (2.1 %) unchanged. Seven use 8192-token chunks; their median is 26.86.
+  - Patch-off boots: **two** (E07.6 26.64 at 4096-token chunks; R01.1 26.38 at 8192). All eight patch-on boots are faster than both.
+  - GEMV gain: +1.1 % at 4096 chunks; +1.2–3.3 % at 8192 chunks, **+1.8 % at the median**.
+  - `data/RESTART/*-defaults-f02-boot` and `data/FINAL/` are the same boot (run 188432), not two.
+  - Within-boot spread of three warm requests is 0.1–0.3 tok/s (E10: 0.34), not "≤ 0.2".
+  - Fixed in README, `docs/patches.md`, the final report (now v1.2), `DSV4 report.md` and the handover e-mail draft.
+- **Gap found:** the E07.8 isolated cuBLAS microbenchmark (160 vs 220 GB/s) has no saved script or raw output (session scratchpad, wiped). vLLM reviewers ask for full commands and raw output, so it must be re-run before a GEMV issue is filed; that needs a short GPU slot.

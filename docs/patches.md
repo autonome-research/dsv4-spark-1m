@@ -50,9 +50,11 @@ the DeepSeek-V4 compressor run as cuBLAS GEMVs. On GB10, cuBLAS reaches about
 unchanged.
 
 **Result.** 4K decode **+1.2 % to +3.3 %**: 26.38 tok/s with the patch off (R01.1)
-against 26.69–27.26 tok/s on six patch-on boots (R01.3, R01.6, R02). The range reflects
+against 26.69–27.26 tok/s (median 26.86) on seven patch-on boots with the same 8192-token
+chunks (E10, F01, F02, R01.3, R01.5, R01.6, R02), so +1.8 % at the median. The range reflects
 the 2.1 % boot-to-boot spread, because a bind-mounted patch cannot be switched within
-one boot. The first measurement (E07.8, 26.64 → 26.93, +1.1 %) was also across boots.
+one boot. The first measurement (E07.6 → E07.8, 4096-token chunks, 26.64 → 26.93, +1.1 %)
+was also across boots. All eight patch-on boots are faster than both patch-off boots.
 
 **Numerics.** In isolation, decode outputs differ only by fp32 summation order
 (≤ 1.5e-7 relative); prefill is bit-exact. Served end to end (`tools/gemv-acc.py`,

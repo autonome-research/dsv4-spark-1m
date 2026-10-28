@@ -1,6 +1,6 @@
 # DSV4 optimisation: final report
 
-**Version 1.1, 2026-10-26.** It is compiled from `reports/DSV4 optimisation log.md`, entries E01–E16, F01–F02, I01–I03, R01.0–R01.7 and R02. It supersedes `DSV4 final report (draft).md` of 2026-10-24. v1.1 adds R02: the boot-compaction helper's first real intervention, and a sixth boot that widens the boot spread and the GEMV range (changes listed at the end).
+**Version 1.2, 2026-10-27.** It is compiled from `reports/DSV4 optimisation log.md`, entries E01–E16, F01–F02, I01–I03, R01.0–R01.7 and R02. It supersedes `DSV4 final report (draft).md` of 2026-10-24. v1.1 adds R02: the boot-compaction helper's first real intervention, and a further boot that widens the boot spread and the GEMV range. v1.2 corrects the boot counts (changes listed at the end).
 
 **Scope:** serving DeepSeek-V4-Flash-0731 (NVFP4) at 1M context, one request at a time, on two DGX Spark GB10 nodes:
 - spark-61dd: the leader, 192.168.200.10;
@@ -61,7 +61,7 @@ Each run was a single request, with DSpark off and thinking off. "Start" is conf
 | 512K | 21.62 [E06] | — | — |
 | 1M | 21.08 [E06] | 24.76 | **25.12** |
 
-- **Boot-to-boot spread** (R01.3, R01.6): five boots with the final configuration gave 4K decode of 26.78–27.26 tok/s, a 1.8 % spread; a sixth boot (R02) gave 26.69, widening it to 26.69–27.26 (2.1 %). Within one boot, three requests vary by ≤ 0.2 tok/s.
+- **Boot-to-boot spread:** eight patch-on boots (E07.8, E10, F01, F02, R01.3, R01.5, R01.6, R02) gave 4K decode of 26.69–27.26 tok/s, a 2.1 % spread; R02 (26.69) widened it from 26.78–27.26 (1.8 %). Within one boot, three warm requests vary by 0.1–0.3 tok/s.
   - [inferred] Cross-boot differences below about 2 % cannot be attributed to a change.
   - Why some boots are faster is not known [hypothesis: thermal state or per-boot memory placement].
 - The 4K step time fell from 42.4 ms (E07.0) to about 36.8 ms (FINAL).
@@ -193,7 +193,7 @@ Code, documentation and history are in the git repository `/srv/dsv4/run` (READM
    - The GEMV patch as a vLLM issue or PR. It needs an SM12x gate, and ideally a same-boot A/B, which the bind-mount design cannot do without a restart.
    - An E16 comment on vLLM #54951 / #61647: works on 2×GB10 at TP=2 and 1M, with no speed change and the threshold at 8192.
 6. **Smaller items.**
-   - Unexplained cross-boot variation (decode 2.1 % over six boots; token-level nondeterminism, E12b).
+   - Unexplained cross-boot variation (decode 2.1 % over eight boots; token-level nondeterminism, E12b).
    - The ctxbench/e12b_client 1M TTFT difference.
    - Leaderwatch and the abort retry have not run in a real failure.
    - mt7925 upstream status.
@@ -219,4 +219,11 @@ Code, documentation and history are in the git repository `/srv/dsv4/run` (READM
 **Changes in v1.1 (2026-10-26, R02).** Added the boot-compaction helper's first real
 intervention (sections 4 and 8). A sixth patch-on boot (26.69 tok/s) widened the
 boot-to-boot spread from 1.8 % to 2.1 % and the GEMV gain range from +1.5–3.3 % to
-+1.2–3.3 %. v1.0 figures were correct for the five boots then measured.
++1.2–3.3 %.
+
+**Changes in v1.2 (2026-10-27, results check before upstream posts).** The boot counts
+were wrong; the ranges were right. There are eight patch-on boots (not six), seven of
+them with 8192-token chunks (median 26.86 tok/s, so the GEMV gain is +1.8 % at the
+median), and two patch-off boots (E07.6 with 4096-token chunks, R01.1 with 8192). The
+F02 restart check and the final benchmark are the same boot. The within-boot spread is
+0.1–0.3 tok/s, not ≤ 0.2 (E10: 0.34).
