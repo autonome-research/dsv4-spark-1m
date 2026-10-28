@@ -49,6 +49,19 @@ the DeepSeek-V4 compressor run as cuBLAS GEMVs. On GB10, cuBLAS reaches about
 **Change.** When M ≤ 8, the projection is issued in 512-row chunks. Prefill is
 unchanged.
 
+**Kernel check (2026-10-27, `tools/gemv-bench.py`; raw output kept locally in `data/GEMV-bench/`, which is not published).**
+Isolated, weights rotated out of L2, CUDA graph, two runs within 1–3 %:
+
+| N × 4096 | M = 1: cuBLAS → chunked | M = 2–8: cuBLAS → chunked |
+|---|---|---|
+| 1024 | 54 → 38 µs (154 → 221 GB/s), **1.40×** | 44–48 → 49–50 µs, **0.87–0.97×** |
+| 2048 | 103 → 75 µs (163 → 223 GB/s), **1.37×** | 79–81 → 96–99 µs, **0.80–0.84×** |
+
+Chunking helps only at M = 1; at M = 2–8 cuBLAS is already faster and chunking slows it
+down. Our deployment decodes at M = 1 only (one request, no speculative decoding, graph
+capture size 1), so the end-to-end result below stands. The gate should nevertheless be
+M = 1, not M ≤ 8: change it at the next planned restart, and in any upstream version.
+
 **Result.** 4K decode **+1.2 % to +3.3 %**: 26.38 tok/s with the patch off (R01.1)
 against 26.69–27.26 tok/s (median 26.86) on seven patch-on boots with the same 8192-token
 chunks (E10, F01, F02, R01.3, R01.5, R01.6, R02), so +1.8 % at the median. The range reflects
