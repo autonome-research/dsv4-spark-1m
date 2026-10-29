@@ -68,6 +68,23 @@ DSV4 T2: worker watch started (pid …); log ~/.cache/dsv4-t2/runs/<run-id>/peer
 DSV4 T2: leader watch started on the worker; log ~/.cache/dsv4-t2/runs/<run-id>/leaderwatch.log (worker)
 ```
 
+**After every successful start**, before handing the server over, run the shape warm-up
+and then the 4K check:
+
+```bash
+/srv/dsv4/run/tools/shape-warmup.py <label>
+```
+
+```bash
+/srv/dsv4/run/tools/boot-4k.sh <label>
+```
+
+The warm-up (about 2 min, 92 short requests) loads every GPU kernel that is specialised
+to a token count while the process is young. vLLM's own warm-up does not cover these, and
+a first-time load two days after boot crashed the engine on 2026-10-28 (I04, optimisation
+log; DeepGEMM issue #443). It must print `ok`. A `FAILED` line means the engine may be
+down: read `docker logs dsv4-leader`.
+
 If the start fails, the launcher runs a coordinated abort and stops its own
 guards. Read the last `fail` message; it names the failed check.
 

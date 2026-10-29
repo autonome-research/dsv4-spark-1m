@@ -1724,3 +1724,16 @@ Procedure and switches: `docs/dspark-experiment.md` (new). Plan approved by the 
   1. Per-boot shape warm-up: right after boot, send prompts of exactly 1–64 tokens (token-ID prompts, `max_tokens` 1) and a few larger sizes, so that every per-count kernel is compiled (if missing) and loaded while the process is young. No image change. It removes this trigger; it does not explain the error.
   2. Durable fix: an image with a newer vLLM and DeepGEMM (≥ 2026-10-16). This is a large change: our patches and all validations must be redone.
   3. Add our data point to DeepGEMM #443 (needs user approval to post).
+
+### 2026-10-29 16:36 — I04 mitigation, step 1: per-boot shape warm-up (`tools/shape-warmup.py`) [measured]
+- **What:** a new client that sends 92 `/v1/completions` requests with token-ID prompts of exactly 1–64 tokens plus 28 sizes up to 8,192, `max_tokens` 1. Random IDs, so no prefix-cache hits. Each request's `prompt_tokens` must equal its length. It stops at the first failure and records the DeepGEMM kernels compiled on both nodes. User approved ("go ahead start with step 1"). Run on the live default boot (run dsv4-t2-20261029T164911Z-1572602, about 5 h up), with 0 requests running.
+- **Result:** all 92 passed in 115 s; health 200 afterwards. `data/WARMUP/20261029T163638-live-5h/`.
+- **New DeepGEMM kernels: 26 per node** (52 in total, identical on both):
+  - 17 einsum kernels, for exactly the counts missing from the cache (3, 4, 6, 8, 9, 10, 20, 21, 24–29, 31, 32) plus a large-M one. This matches the prediction from the source.
+  - 9 linear-layer GEMM kernels (`fp8_fp4_gemm_1d1d`) at 3, 6, 9 and 10 tokens and one large-M configuration. vLLM's `fp8_gemm_nt` warm-up does not cover every small count either.
+  - Compiles took about 1 s each, and all were done by 16:37:06.
+- TileLang compiled two `mhc_pre_big_fuse*` kernels during the run on both ranks (`jit_monitor` warnings, 16:36:54 and 16:37:15).
+- **One-time 25–30 s cost at 7,168 and 8,192 tokens** (normally about 3 s). Repeated straight after: 3.43, 3.02 and 3.39 s. No JIT cache was written then. [hypothesis] First-time allocation of larger buffers in the process; not investigated. Without the warm-up, a user's first long prefill would pay it.
+- [inferred] This process now has every einsum and hc_prenorm count from 1 to 64 loaded, so the I04 trigger cannot recur on those paths during this boot. Steps of 65 to 8,191 tokens use the general large-M kernels, loaded at 80 tokens and above. The warm-up removes the trigger, not the cause of NOT_PERMITTED.
+- **Docs:** `docs/operations.md` (Start: run `shape-warmup.py`, then `boot-4k.sh`, after every start), README (tools), `data/README.md` (WARMUP row).
+- **Next:** step 2, a long-lived load canary to reproduce NOT_PERMITTED outside the server; step 3, a newer DeepGEMM as an opt-in mount.
