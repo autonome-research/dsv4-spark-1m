@@ -1675,3 +1675,30 @@ Procedure and switches: `docs/dspark-experiment.md` (new). Plan approved by the 
   - [inferred] Collectives inside CUDA graphs are not logged (E07.1), so the rule covers eager collectives only.
 - **Docs**: `docs/dspark-experiment.md` (isolation model, switches, Stage 0 table, Stage 1 commands, stop rules, rollback, adoption criteria); `docs/patches.md` (two new patches, md5s, sections); README (configuration rows, layout, tools); `docs/operations.md` (link; the tmpfiles cause in the alert table); `data/README.md` (new data directories).
 - **Next:** Stage 1 needs a window agreed with Velvet, with Velvet reachable for a reboot. The leader's latched `D-state>10s` alert (tmpfiles, 2026-10-27) must be cleared before any start.
+
+### 2026-10-28 22:45 — I04: serving engine crashed during the DSpark Stage 1 reference run (DSpark OFF) [measured]
+- **What ran:** `tools/dspark-ladder.sh ref-off check tiny 4k acc 65536` on the default boot (run dsv4-t2-20261027T045050Z-1029193, about 2 days up), after a check that 0 requests were running. User said "go ahead"; this was step 1 of Stage 1, which needs no restart.
+- **Passed before the crash:**
+  - `check`: ranks agree (5,771 eager collectives);
+  - `tiny`: 10/10 identical greedy outputs ("Paris. ..."); ranks agree (6,961);
+  - `4k`: decode 26.93 / 26.85 / 26.79 tok/s, in the normal range; ranks agree (8,758).
+- **Crash:** in rung `acc` (the 52 fixed prompts of `gemv-acc.py`, which ran cleanly on the 10-24 and 10-26 boots), after two 200 responses. The engine died on a 17-token greedy prefill:
+  `RuntimeError: CUDA driver error (deepgemm .../jit/handle.hpp:154): 800 (CUDA_ERROR_NOT_PERMITTED)`
+  The call stack is `fp8_einsum` ← `deep_gemm_fp8_o_proj` ← `flashinfer_sparse.py:552 _o_proj`, on the leader's Worker_TP0.
+  - The client got HTTP 500, and the ladder stopped as designed (exit 4).
+  - The leader container exited with code 0 at 22:45:48; peerwatch logged "leader container is not running" and exited.
+  - Worker leaderwatch began counting /health failures (18 × 10 s) to stop the worker, by design.
+  - No kernel log entries 22:44:30–22:47.
+- **Evidence:** `data/DSPARK/20261028T224355-ref-off/` (`ladder.log`, `leader-container.log` with the full trace and the engine's input dump, `leader-inspect.json`).
+- **Interpretation:**
+  - [measured] DeepGEMM warm-up covered 1,762 shapes at boot. `jit_monitor` logged in-inference JIT compiles on this boot (Triton 10-27 04:57; TileLang 10-28 06:44) without failures.
+  - [inferred] The 17-token prefill needed a DeepGEMM kernel that the warm-up had not covered. JIT-loading that new kernel module failed with NOT_PERMITTED. This is the upstream class of #60929 / #58559 (kernels compiled during inference). DeepGEMM's JIT cache is not in our persisted runtime-cache mounts, so every boot compiles its own.
+  - [hypothesis, unverified] The cause of NOT_PERMITTED for a module load in a 2-day-old process: a concurrent CUDA-graph or stream-capture state (async scheduling), or a driver resource limit after long uptime. Same prompts and configuration passed on two earlier boots.
+- **Consequence:** the model was offline for Velvet from 22:45:45. **This is a defect in the default serving configuration**, not in DSpark (DSpark was off). A short prompt with an untested shape can crash the server. The DSpark experiment is paused until it is understood.
+- Not done by me: restart, alert clearing (human only).
+- **I04 cleanup** [measured]:
+  - Leaderwatch stopped the worker as designed: guard latched 22:48:41, `docker stop` exit 0 at 22:48:58.
+  - The worker GPU was then in the known "ownerless 96 %" state: 96 % at about 20 W, no compute process, no container. The leader GPU read 0 %.
+  - `gb10-reclaim` on the worker (MemAvailable 118 GiB) did not clear it.
+  - A bounded small CUDA job on the worker (`timeout 120 docker run --rm --gpus all --network none` with the serving image, a 1M-element torch add) printed "cuda job ok". The GPU fell to 0 % at about 5 W. This is the same remedy as 2026-10-13; no reboot was needed.
+  - Both nodes are clean. Both have latched alerts, which a human must clear before the start: the leader's tmpfiles alert of 10-27, and the worker's `D-state>10s` alert dated 2026-10-28 22:21:28 (cause not yet checked).
