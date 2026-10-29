@@ -1702,3 +1702,11 @@ Procedure and switches: `docs/dspark-experiment.md` (new). Plan approved by the 
   - `gb10-reclaim` on the worker (MemAvailable 118 GiB) did not clear it.
   - A bounded small CUDA job on the worker (`timeout 120 docker run --rm --gpus all --network none` with the serving image, a 1M-element torch add) printed "cuda job ok". The GPU fell to 0 % at about 5 W. This is the same remedy as 2026-10-13; no reboot was needed.
   - Both nodes are clean. Both have latched alerts, which a human must clear before the start: the leader's tmpfiles alert of 10-27, and the worker's `D-state>10s` alert dated 2026-10-28 22:21:28 (cause not yet checked).
+
+### 2026-10-29 09:55 — Cause of the worker's `D-state>10s` alert of 2026-10-28 22:21:28
+- [measured] The worker guard snapshot (run dsv4-t2-20261027T045050Z-1029193) names PID 3197259 in D state for over 10 s, alerted at 22:21:28. The process is gone.
+- [measured] Worker journal: at 22:21:05, an interactive sudo session (pts/1) ran `/home/the user account/wf-setup/align-ids.sh` as root. It ran `groupmod` twice (PID 3197250 at 22:21:05: sfsu 1005→1007; PID 3197934 at 22:21:37: tia 1003→1005). No other non-ssh events in that window.
+- [inferred] PID 3197259 is the step right after the first `groupmod`, most likely a recursive ownership change of that group's files, which blocks on disk I/O. It is a manual admin action, not this project's work: I have no general sudo, and my Stage 0 work ran only on the leader. It had no effect on serving.
+- Same class as the leader's tmpfiles alert of 10-27: a short D-state from system maintenance, latched while serving. The proposal to add an ignore list for such processes still awaits approval.
+- 2026-10-29 09:49: the user cleared both alerts and started the default configuration (run dsv4-t2-20261029T164911Z-1572602).
+- [measured] Default boot back after I04: healthy at 09:54:34 (about 5.5 min). Both rank-consistency checks passed (first real start with the new `decode` check). Mounts: `dsv4-attention.py`, `dsv4-sparse-attn-indexer.py`; flags `--enable-prefix-caching --async-scheduling`; no DSpark. `tools/boot-4k.sh after-I04`: decode 26.97 tok/s median (26.91–27.05), TTFT 1.7 s. In the normal range (26.7–27.3).
