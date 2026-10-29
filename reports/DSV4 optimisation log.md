@@ -1638,3 +1638,18 @@ Two read-only reviews checked the docs against the code and log, and the code co
   - **New:** at M = 2, 4 and 8, chunking is **slower** (1024 rows 0.87–0.97×, 2048 rows 0.80–0.84×); cuBLAS reaches 176–214 GB/s there.
   - Max relative difference 1.6e-7 at M = 1, up to 4.8e-6 at M = 8.
   - Consequence [inferred]: our deployment decodes only at M = 1 (max-num-seqs 1, no spec decode, cudagraph capture size 1), so E07.8/R01 results stand. The patch's gate `_DSV4_GEMV_MAX_M = 8` is wrong for M = 2–8 and should be 1. Not changed in the live patch (that needs a restart); recommended for the next planned restart and for any upstream version. Server /health 200 after the runs.
+
+### 2026-10-28 — Latched serving-mode alert: daily tmpfiles cleanup [measured]
+- Run dsv4-t2-20261027T045050Z-1029193: the leader guard latched `D-state>10s` at 2026-10-27 17:37:11 (PID 1253229). The model kept serving (both containers up, /health 200), as designed: alerts never stop the model; they block the next start.
+- Cause [measured, strong]: the PID's start time (17:37:01.4) equals the start of `systemd-tmpfiles-clean.service` (17:37:01 to 17:37:15). That run took 14 s; it usually takes under 1 s (10 s on 10-26). It is daily housekeeping, the same class as `fstrim` (already in `D_STATE_IGNORE`). It is not the GEMV benchmark, which ended at about 17:06.
+- [hypothesis] The long runs on 10-26/27 may come from many files under /tmp (session scratch, export builds); not checked.
+- **Correction (handover e-mail draft):** it said the guard "aborts ... a running server" and listed "the guard" as a cause of a server stopping by itself. Both are wrong (docs/operations.md was right). Fixed in the draft.
+- Proposed, not applied (it needs a guard change on both nodes): add `systemd-tmpfile` (the 15-character comm) to `D_STATE_IGNORE`. The alert must be cleared by a human before the next start.
+
+### 2026-10-28 — DSpark go/no-go research update (read-only)
+Notes: `reports/research_notes/DSpark upstream survey/update-2026-10-28.md`.
+- [measured] Our image runs the V2 model runner, and its config allows async scheduling with DSpark. The #62417/#59986 FULL-graph corruption does not apply to our backend: MRV2 takes the weakest builder support, and ours is `UNIFORM_BATCH`.
+- [measured] Model: 256 experts, 6 per token; the DSpark draft is 10.1 GiB (about 5 GiB per rank). Upstream: #62769, #50843, #53984, #60928/#60929 and #58559 are still open; FI4732 and the CX7 pinning already remove the two most likely causes of Velvet's hangs.
+- [derived] The verify step reads 3.3–5.7× more expert bytes (about 20–34 distinct experts per layer), so about 50–71 ms; community measurement 74 ms. Estimate 35–60 tok/s at 4K (1.3–2.2×) and 26–60 at 1M, depending on acceptance.
+- **Prerequisite:** the GEMV patch gate must become M = 1 (M = 6 verify is 0.80–0.97× with chunking), or DSpark runs with `DSV4_PATCH=0`.
+- Recommendation: go as a controlled experiment in an agreed window. The ladder and no-go conditions are in the notes.
