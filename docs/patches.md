@@ -4,12 +4,15 @@ All patches are **bind-mounted read-only** over files in the stock image
 `local/vllm-openai:46638857-fi0618` (vLLM commit `46638857fdbb`) when the container
 starts. The image itself is never modified. Each patch can be switched off per
 start with an environment variable. `node-launch.sh` prints the md5 (8 hex digits)
-of the mounted indexer files and `launch-dsv4.sh` refuses a start whose ranks differ;
+of the mounted indexer files, and of the GEMV and DSpark-loader files, and
+`launch-dsv4.sh` refuses a start whose ranks differ;
 `tools/final-bench.sh` records the full md5 of every mounted file in `config.txt`.
 
 | Patch | File(s) in `patches/` | Mounted over | Switch | Default |
 |---|---|---|---|---|
-| [Chunked compressor GEMV](#chunked-compressor-gemv) | `dsv4-attention.py` | `vllm/models/deepseek_v4/attention.py` | `DSV4_PATCH` | on |
+| [Chunked compressor GEMV](#chunked-compressor-gemv) | `dsv4-attention.py` | `vllm/models/deepseek_v4/attention.py` | `DSV4_PATCH=1` | on |
+| [GEMV, M = 1 variant](#m--1-variant-dsv4-attention-m1py) | `dsv4-attention-m1.py` | `vllm/models/deepseek_v4/attention.py` | `DSV4_PATCH=m1` | off (for the DSpark experiment) |
+| [DSpark draft loader](#dspark-draft-loader) | `dsv4-dspark.py` | `vllm/models/deepseek_v4/nvidia/dspark.py` | `DSV4_DSPARK_LOADFIX=1` | off (only if the #51916 `KeyError` appears) |
 | [Split indexer](#split-indexer) | `dsv4-sparse-attn-indexer.py` | `vllm/model_executor/layers/sparse_attn_indexer.py` | `DSV4_IDX_MODE=split` | on |
 | [Indexer row sharding (E16)](#indexer-row-sharding-e16) | `dsv4-rowshard-sparse-attn-indexer.py`, `dsv4-rowshard-mla-indexer.py`, `dsv4-rowshard-config-attention.py` | `.../sparse_attn_indexer.py`, `vllm/v1/attention/backends/mla/indexer.py`, `vllm/config/attention.py` | `DSV4_IDX_MODE=rowshard` | off (E16: no gain; kept for reference) |
 | [FlashInfer #4732](#flashinfer-4732-backport) | `dsv4-fi4732-sparse_mla_sm120.so` | `flashinfer_jit_cache/jit_cache/sparse_mla_sm120/sparse_mla_sm120.so` | `DSV4_FI4732` | on |
@@ -20,6 +23,8 @@ can be reviewed with a plain `diff`:
 
 ```bash
 diff -u patches/dsv4-attention.orig.py patches/dsv4-attention.py
+diff -u patches/dsv4-attention.py patches/dsv4-attention-m1.py
+diff -u patches/dsv4-dspark.orig.py patches/dsv4-dspark.py
 diff -u patches/dsv4-sparse-attn-indexer.orig.py patches/dsv4-sparse-attn-indexer.py
 ```
 
@@ -32,6 +37,8 @@ Reference md5s (first 10 hex digits):
 | File | md5 |
 |---|---|
 | `dsv4-attention.py` | `cd6b032cee` |
+| `dsv4-attention-m1.py` | `27bdebafd5` |
+| `dsv4-dspark.py` | `2d8a3df6c1` |
 | `dsv4-sparse-attn-indexer.py` | `ffcdc4a05c` |
 | `dsv4-rowshard-sparse-attn-indexer.py` | `81456b6a7d` |
 | `dsv4-rowshard-mla-indexer.py` | `98276bb8ef` |
@@ -60,7 +67,8 @@ Isolated, weights rotated out of L2, CUDA graph, two runs within 1–3 %:
 Chunking helps only at M = 1; at M = 2–8 cuBLAS is already faster and chunking slows it
 down. Our deployment decodes at M = 1 only (one request, no speculative decoding, graph
 capture size 1), so the end-to-end result below stands. The gate should nevertheless be
-M = 1, not M ≤ 8: change it at the next planned restart, and in any upstream version.
+M = 1, not M ≤ 8. That is the [M = 1 variant](#m--1-variant-dsv4-attention-m1py), a new
+file so that this file's md5 still identifies every earlier result.
 
 **Result.** 4K decode **+1.2 % to +3.3 %**: 26.38 tok/s with the patch off (R01.1)
 against 26.69–27.26 tok/s (median 26.86) on seven patch-on boots with the same 8192-token
@@ -77,6 +85,45 @@ was also across boots. All eight patch-on boots are faster than both patch-off b
   near-tied tokens (p ≈ 0.5–0.6) and both versions are correct;
 - each configuration is deterministic within its boot, and patch-on output was
   bit-stable over 26 h of uptime.
+
+### M = 1 variant (`dsv4-attention-m1.py`)
+
+Identical to `dsv4-attention.py` except `_DSV4_GEMV_MAX_M = 1` and its comment. Selected
+with `DSV4_PATCH=m1`. Needed for DSpark ([dspark-experiment.md](dspark-experiment.md)),
+whose verify (M = 6) and draft (M = 5) steps would otherwise take the slower chunked path.
+At M = 1 it runs the same code as `dsv4-attention.py`, so decode without DSpark is
+unchanged; it can become the default after one boot check.
+
+Test (CPU, no GPU or network; dispatch and arithmetic only):
+
+```bash
+docker run --rm --network none -v /srv/dsv4/run:/r:ro --entrypoint python3 local/vllm-openai:46638857-fi0618 /r/tools/test-gemv-gate.py /r/patches/dsv4-attention-m1.py
+```
+
+Result 2026-10-28: PASS. The same test on `dsv4-attention.py` fails at M = 2–8, as
+intended: it tests the rule, not the file's constant.
+
+---
+
+## DSpark draft loader
+
+**Problem.** In our image, DSpark's `load_weights` (`vllm/models/deepseek_v4/nvidia/dspark.py`)
+indexes mapped expert parameters directly. When the draft does not register a target
+expert scale weight, the start fails with `KeyError ... w13_weight_scale` (upstream
+#51916, seen on 8×H20). Whether our MoE backend triggers it can only be seen by starting
+DSpark.
+
+**Change.** The guard from upstream PR #53984 (skip a mapped expert parameter the draft
+does not have), plus a warning that counts the skipped names. Upstream skips silently, but
+a silently dropped draft tensor lowers acceptance without any error (a community build lost
+12 shared-expert tensors this way and fell to 25.7 % acceptance).
+
+**Use.** Off by default; `DSV4_DSPARK_LOADFIX=1` (needs `DSV4_SPEC=on`) only if the
+`KeyError` appears. Then record the warning's count; acceptance below 40 % stops the
+experiment.
+
+**Status.** Built and compiled (2026-10-28). Not yet used: no DSpark start has run on this
+stack.
 
 ---
 

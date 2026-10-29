@@ -39,6 +39,9 @@ timestamped directory.
 | `F01/` | F01, F02 | Soak monitor logs (`soak-<run>*.log`) and inference probes (`probe-<run>*.jsonl`) |
 | `FINAL/<ts>-f02-boot/` | Final benchmark | 4K ×3, 64K ×2, 256K, 1M on the F02 boot, with `config.txt` and md5s |
 | `GEMV/` | F02, R01.1 | GEMV patch accuracy runs, patch on (2 runs) and off |
+| `GEMV-bench/` | 2026-10-27 | `tools/gemv-bench.py` raw output, two runs |
+| `DSPARK-S0/` | DSpark Stage 0 | vLLM DSpark unit tests at commit 46638857, CPU (`pytest-cpu-<ts>.log`) |
+| `DSPARK/<ts>-<label>/` | DSpark Stage 1 | `tools/dspark-ladder.sh` runs: `config.txt`, `ladder.log`, per-rung output, memory monitor, spec-decode counters |
 | `RESTART/<ts>-<label>/` | R01.0–R01.6 | Per-boot 4K check (warm-up + 3) for each boot of the restart series |
 | `thermal/` | E13, R01.7 | `<host>-<date>.csv` for both nodes (worker files copied from `gx10:~/dsv4-thermal/`); no data 2026-10-23 → 2026-10-26 16:51 |
 | `investigation/` | INV-1 | Network investigation write-ups (`network.md`, `timeline.md`, `history.md`) |

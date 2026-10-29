@@ -44,13 +44,18 @@ OBS_STARTED=0
 export DSV4_STACK=upstream
 export DSV4_IMAGE=local/vllm-openai:46638857-fi0618
 export DSV4_GPU_MEMORY_UTILIZATION=0.72
-SPEC_MODE=off
 
 fail() { echo "DSV4 T2: $*" >&2; exit 1; }
 # Diagnostics mode (NCCL INFO logs, torch NCCL desync/timing/dump-on-timeout). On by default;
 # DSV4_DIAG=0 turns it off. Overhead not measurable at 4K (optimisation log R01.3).
 DIAG_MODE="${DSV4_DIAG:-1}"
 [[ "$DIAG_MODE" == 0 || "$DIAG_MODE" == 1 ]] || fail "DSV4_DIAG must be 0 or 1 (got: $DIAG_MODE)"
+# DSpark speculative decoding: off by default. DSV4_SPEC=on is for the attended DSpark
+# experiment only (docs/dspark-experiment.md); it needs NCCL diagnostics on, because the
+# experiment compares the two ranks' collectives (tools/dspark-ladder.sh).
+SPEC_MODE="${DSV4_SPEC:-off}"
+[[ "$SPEC_MODE" == off || "$SPEC_MODE" == on ]] || fail "DSV4_SPEC must be off or on (got: $SPEC_MODE)"
+[[ "$SPEC_MODE" == off || "$DIAG_MODE" == 1 ]] || fail "DSV4_SPEC=on needs DSV4_DIAG=1"
 # Indexer mode (E12 / E16): split (default), rowshard or off; passed to both nodes by launch-dsv4.sh.
 [[ -z "${DSV4_IDX_MODE:-}" || "$DSV4_IDX_MODE" =~ ^(split|rowshard|off)$ ]] || fail "DSV4_IDX_MODE must be split, rowshard or off (got: $DSV4_IDX_MODE)"
 # Prefill chunk size (optimisation log E10). DSV4_MAX_BATCH overrides the 8192 default.
@@ -67,7 +72,8 @@ if [[ -z "${DSV4_KV_CACHE_BYTES:-}" ]]; then
 fi
 [[ "$DSV4_KV_CACHE_BYTES" =~ ^[0-9]+$ ]] || fail "DSV4_KV_CACHE_BYTES must be a byte count (got: $DSV4_KV_CACHE_BYTES)"
 export DSV4_KV_CACHE_BYTES
-echo "DSV4 T2: prefill chunk $MAX_BATCH, KV cache $DSV4_KV_CACHE_BYTES bytes, indexer ${DSV4_IDX_MODE:-split (default)}, diagnostics $DIAG_MODE"
+echo "DSV4 T2: prefill chunk $MAX_BATCH, KV cache $DSV4_KV_CACHE_BYTES bytes, indexer ${DSV4_IDX_MODE:-split (default)}, diagnostics $DIAG_MODE, speculative decoding $SPEC_MODE"
+[[ "$SPEC_MODE" == off ]] || echo "DSV4 T2: EXPERIMENT: DSpark on (async ${DSV4_ASYNC:-0 (default with DSpark)}, prefix cache ${DSV4_PREFIX_CACHE:-1}, loader patch ${DSV4_DSPARK_LOADFIX:-0}); see docs/dspark-experiment.md"
 timed() { timeout --kill-after=2 "$1" "${@:2}"; }
 ssh_timed() { timed "$SSH_TIMEOUT" ssh -o BatchMode=yes -o ConnectTimeout=5 "$PEER" "$@"; }
 

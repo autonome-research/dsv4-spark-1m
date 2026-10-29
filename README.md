@@ -206,7 +206,9 @@ adopted configuration.
 | `DSV4_KV_CACHE_BYTES` | derived from chunk | bytes | KV cache size. 8192 → `11274289152` (1,094,398 tokens) |
 | `DSV4_IDX_MODE` | `split` | `split`, `rowshard`, `off` | Lightning Indexer prefill: our key split, upstream row sharding (E16), or stock |
 | `DSV4_ROWSHARD_MIN_ROWS` | `8192` | integer | `indexer_tp_shard_min_rows` for `rowshard` mode |
-| `DSV4_PATCH` | `1` | `0`, `1` | Chunked compressor GEMV patch |
+| `DSV4_PATCH` | `1` | `0`, `1`, `m1` | Chunked compressor GEMV patch; `m1` = the M = 1 variant for DSpark ([patches.md](docs/patches.md)) |
+| `DSV4_SPEC` | `off` | `off`, `on` | DSpark speculative decoding; experiment only ([dspark-experiment.md](docs/dspark-experiment.md)). Needs `DSV4_DIAG=1` |
+| `DSV4_DSPARK_LOADFIX` | `0` | `0`, `1` | DSpark draft-loader patch (#53984 guard); only with `DSV4_SPEC=on` |
 | `DSV4_FI4732` | `1` | `0`, `1` | FlashInfer #4732 sparse-MLA module |
 | `DSV4_ASYNC` | on when DSpark is off | `0`, `1` | `--async-scheduling` |
 | `DSV4_DIAG` | `1` | `0`, `1` | NCCL/Torch diagnostic logging (`NCCL_DEBUG=INFO`, desync debug) |
@@ -310,6 +312,8 @@ A latched alert blocks the next start until a person clears it; see
 ├── dsv4-abort.sh              Coordinated exact-ID abort
 ├── patches/                   Bind-mounted vLLM/FlashInfer patches (see docs/patches.md)
 │   ├── dsv4-attention.py                      chunked compressor GEMV
+│   ├── dsv4-attention-m1.py                   the same, M = 1 only (for DSpark)
+│   ├── dsv4-dspark.py                         DSpark draft-loader guard (opt-in)
 │   ├── dsv4-sparse-attn-indexer.py            split indexer (default)
 │   ├── dsv4-rowshard-*.py                     upstream row sharding port (E16)
 │   ├── dsv4-fi4732-sparse_mla_sm120.so        rebuilt FlashInfer module
@@ -339,6 +343,9 @@ tools/run-guarded.sh 65536 data/r64k  # one ctxbench request under the memory wa
 tools/boot-4k.sh <label>              # per-boot 4K check (warm-up + 3) → data/RESTART/<ts>-<label>/
 tools/e16-ab.sh                       # indexer-mode A/B (split / rowshard / off) → data/E16/
 tools/gemv-acc.py run patch-on 2      # GEMV patch accuracy; then: gemv-acc.py compare a.json b.json
+tools/gemv-bench.py                   # isolated GEMV kernel benchmark (in the serving image)
+tools/test-gemv-gate.py <patch>       # CPU test of the GEMV patch gate (in the serving image)
+tools/dspark-ladder.sh <label> [rungs] # DSpark experiment ladder with stop rules → data/DSPARK/
 ```
 
 Method (`tools/ctxbench.py`): a unique filler prefix per request defeats the prefix

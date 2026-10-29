@@ -213,13 +213,23 @@ ASYNC_FLAG=--no-async-scheduling
 [[ "$ASYNC" == 1 ]] && ASYNC_FLAG=--async-scheduling
 
 # Local vLLM patch (optimisation log E07.8): compressor GEMV issued in 512-row
-# chunks at decode. Bind-mounted over the image's file; DSV4_PATCH=0 disables.
+# chunks at decode. Bind-mounted over the image's file. DSV4_PATCH:
+#   1  (default) dsv4-attention.py, chunks for M <= 8
+#   m1 dsv4-attention-m1.py, chunks for M = 1 only (2026-10-27 benchmark: chunking is
+#      slower at M = 2-8, which DSpark's verify and draft steps use)
+#   0  the image's own file
 PATCH_ARGS=()
-if [[ "${DSV4_PATCH:-1}" == 1 ]]; then
-  for p in /srv/dsv4/run/patches/dsv4-attention.py "$HOME/dsv4-attention.py"; do
+case "${DSV4_PATCH:-1}" in
+  0) PATCH_FILE= ;;
+  1) PATCH_FILE=dsv4-attention.py ;;
+  m1) PATCH_FILE=dsv4-attention-m1.py ;;
+  *) echo "DSV4_PATCH must be 0, 1 or m1 (got: $DSV4_PATCH)" >&2; exit 1 ;;
+esac
+if [[ -n $PATCH_FILE ]]; then
+  for p in "/srv/dsv4/run/patches/$PATCH_FILE" "$HOME/$PATCH_FILE"; do
     [[ -f "$p" ]] && { PATCH_ARGS=(-v "$p:/usr/local/lib/python3.12/dist-packages/vllm/models/deepseek_v4/attention.py:ro"); break; }
   done
-  [[ ${#PATCH_ARGS[@]} -gt 0 ]] || { echo "DSV4_PATCH=1 but dsv4-attention.py was not found" >&2; exit 1; }
+  [[ ${#PATCH_ARGS[@]} -gt 0 ]] || { echo "DSV4_PATCH=${DSV4_PATCH:-1} but $PATCH_FILE was not found" >&2; exit 1; }
 fi
 
 # Indexer prefill mode. DSV4_IDX_MODE:
@@ -282,6 +292,28 @@ if [[ "$SPEC_MODE" == on ]]; then
   SPEC_ARGS=(--speculative-config '{"method":"dspark","num_speculative_tokens":5,"draft_sample_method":"probabilistic"}')
 fi
 
+# DSpark draft-loader patch (docs/dspark-experiment.md, Stage 0): upstream vLLM #53984's
+# guard for draft expert params the draft does not register (#51916 KeyError), plus a
+# warning that counts them. Opt-in, and only meaningful with spec_mode=on.
+DSPARK_ARGS=()
+case "${DSV4_DSPARK_LOADFIX:-0}" in
+  0) ;;
+  1)
+    [[ "$SPEC_MODE" == on ]] || { echo "DSV4_DSPARK_LOADFIX=1 needs spec_mode=on" >&2; exit 1; }
+    for p in /srv/dsv4/run/patches/dsv4-dspark.py "$HOME/dsv4-dspark.py"; do
+      [[ -f "$p" ]] && { DSPARK_ARGS=(-v "$p:/usr/local/lib/python3.12/dist-packages/vllm/models/deepseek_v4/nvidia/dspark.py:ro"); break; }
+    done
+    [[ ${#DSPARK_ARGS[@]} -gt 0 ]] || { echo "DSV4_DSPARK_LOADFIX=1 but dsv4-dspark.py was not found" >&2; exit 1; }
+    ;;
+  *) echo "DSV4_DSPARK_LOADFIX must be 0 or 1 (got: $DSV4_DSPARK_LOADFIX)" >&2; exit 1 ;;
+esac
+
+# Settings that must be identical on both ranks, or they run different collectives and
+# NCCL hangs. launch-dsv4.sh compares this line between the nodes and aborts on a mismatch.
+md5_of() { if [[ -n $1 ]]; then md5sum "${1%%:*}" | cut -c1-8; else echo none; fi; }
+echo "node-launch: decode spec=$SPEC_MODE async=$ASYNC prefix_cache=$PREFIX_CACHE" \
+  "gemv=$(md5_of "${PATCH_ARGS[1]:-}") dspark_loader=$(md5_of "${DSPARK_ARGS[1]:-}")" >&2
+
 if [[ "$STACK" == upstream ]]; then
   BACKEND_ARGS=(
     --attention-backend FLASHINFER_MLA_SPARSE_DSV4
@@ -319,6 +351,7 @@ if ! timeout --kill-after=2 180 docker run -d --name "$NAME" --restart=no \
   -v "$RUNTIME_CACHE_ROOT/flashinfer:/root/.cache/flashinfer" \
   -v "$DIAG_DIR:/tmp/vllm-debug" \
   "${PATCH_ARGS[@]}" \
+  "${DSPARK_ARGS[@]}" \
   "${IDX_ARGS[@]}" \
   "${FI_ARGS[@]}" \
   "${ENVS[@]}" \

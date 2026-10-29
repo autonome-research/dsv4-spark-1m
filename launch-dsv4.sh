@@ -73,7 +73,7 @@ up)
   # Both ends go through node-launch.sh, which builds the docker command with
   # bash arrays and runs it locally. Never interpolate the args into an ssh
   # string -- the remote shell strips the quotes out of --speculative-config.
-  timed "$SSH_TIMEOUT" scp -q "$HERE/node-launch.sh" "$HERE/cx7-nccl-env.sh" "$HERE/dsv4-t2-guard.py" "$HERE/patches/dsv4-attention.py" "$HERE/patches/dsv4-sparse-attn-indexer.py" "$HERE/patches/dsv4-rowshard-sparse-attn-indexer.py" "$HERE/patches/dsv4-rowshard-mla-indexer.py" "$HERE/patches/dsv4-rowshard-config-attention.py" "$HERE/patches/dsv4-fi4732-sparse_mla_sm120.so" "$HERE/dsv4-leaderwatch.sh" "$PEER:" || {
+  timed "$SSH_TIMEOUT" scp -q "$HERE/node-launch.sh" "$HERE/cx7-nccl-env.sh" "$HERE/dsv4-t2-guard.py" "$HERE/patches/dsv4-attention.py" "$HERE/patches/dsv4-attention-m1.py" "$HERE/patches/dsv4-dspark.py" "$HERE/patches/dsv4-sparse-attn-indexer.py" "$HERE/patches/dsv4-rowshard-sparse-attn-indexer.py" "$HERE/patches/dsv4-rowshard-mla-indexer.py" "$HERE/patches/dsv4-rowshard-config-attention.py" "$HERE/patches/dsv4-fi4732-sparse_mla_sm120.so" "$HERE/dsv4-leaderwatch.sh" "$PEER:" || {
     echo 'bounded worker preparation failed' >&2; exit 1;
   }
   timed "$SSH_TIMEOUT" ssh -o BatchMode=yes "$PEER" 'mkdir -p ~/.cache/dsv4-t2 && chmod 700 ~/.cache/dsv4-t2 && cp -p ~/dsv4-t2-guard.py ~/.cache/dsv4-t2/guard.py && chmod 700 ~/.cache/dsv4-t2/guard.py && chmod +x ~/node-launch.sh ~/cx7-nccl-env.sh ~/dsv4-leaderwatch.sh' || {
@@ -99,7 +99,7 @@ up)
   printf -v REMOTE_GPU_UTIL '%q' "$GPU_MEMORY_UTILIZATION"
   printf -v REMOTE_IDX_MODE '%q' "${DSV4_IDX_MODE:-}"
   printf -v REMOTE_MIN_ROWS '%q' "${DSV4_ROWSHARD_MIN_ROWS:-8192}"
-  worker_output=$(timed "$LAUNCH_TIMEOUT" ssh -o BatchMode=yes "$PEER" "DSV4_PROFILE=${DSV4_PROFILE:-0} DSV4_ASYNC=${DSV4_ASYNC:-} DSV4_PATCH=${DSV4_PATCH:-1} DSV4_IDX_SPLIT=${DSV4_IDX_SPLIT:-1} DSV4_IDX_MODE=$REMOTE_IDX_MODE DSV4_ROWSHARD_MIN_ROWS=$REMOTE_MIN_ROWS DSV4_FI4732=${DSV4_FI4732:-1} DSV4_KV_CACHE_BYTES=${DSV4_KV_CACHE_BYTES:-9663676416} DSV4_PREFIX_CACHE=${DSV4_PREFIX_CACHE:-1} DSV4_STACK=$REMOTE_STACK DSV4_IMAGE=$REMOTE_IMG DSV4_GPU_MEMORY_UTILIZATION=$REMOTE_GPU_UTIL DSV4_T2_RUN_ID='$RUN_ID' ~/node-launch.sh 1 '$CG' '$MB' '$MS' '$SPEC' '$DIAG' '$MAXLEN'" 2>&1)
+  worker_output=$(timed "$LAUNCH_TIMEOUT" ssh -o BatchMode=yes "$PEER" "DSV4_PROFILE=${DSV4_PROFILE:-0} DSV4_ASYNC=${DSV4_ASYNC:-} DSV4_PATCH=${DSV4_PATCH:-1} DSV4_DSPARK_LOADFIX=${DSV4_DSPARK_LOADFIX:-0} DSV4_IDX_SPLIT=${DSV4_IDX_SPLIT:-1} DSV4_IDX_MODE=$REMOTE_IDX_MODE DSV4_ROWSHARD_MIN_ROWS=$REMOTE_MIN_ROWS DSV4_FI4732=${DSV4_FI4732:-1} DSV4_KV_CACHE_BYTES=${DSV4_KV_CACHE_BYTES:-9663676416} DSV4_PREFIX_CACHE=${DSV4_PREFIX_CACHE:-1} DSV4_STACK=$REMOTE_STACK DSV4_IMAGE=$REMOTE_IMG DSV4_GPU_MEMORY_UTILIZATION=$REMOTE_GPU_UTIL DSV4_T2_RUN_ID='$RUN_ID' ~/node-launch.sh 1 '$CG' '$MB' '$MS' '$SPEC' '$DIAG' '$MAXLEN'" 2>&1)
   worker_rc=$?
   printf '%s\n' "$worker_output"
   if (( worker_rc != 0 )); then
@@ -133,6 +133,13 @@ up)
   [[ -n $w_idx && $w_idx == "$l_idx" ]] || {
     echo "indexer mismatch: worker [$w_idx] leader [$l_idx]" >&2
     "$HERE/dsv4-abort.sh" --run-id "$RUN_ID" --reason 'indexer mode mismatch between ranks' || true; exit 1;
+  }
+  # The same for the decode path (docs/dspark-experiment.md): speculative decoding, async
+  # scheduling, prefix caching and the GEMV / DSpark-loader patch files.
+  w_dec=$(grep -m1 '^node-launch: decode ' <<<"$worker_output"); l_dec=$(grep -m1 '^node-launch: decode ' <<<"$leader_output")
+  [[ -n $w_dec && $w_dec == "$l_dec" ]] || {
+    echo "decode settings mismatch: worker [$w_dec] leader [$l_dec]" >&2
+    "$HERE/dsv4-abort.sh" --run-id "$RUN_ID" --reason 'decode settings mismatch between ranks' || true; exit 1;
   }
   echo
   echo "stack=$STACK image=$IMG"

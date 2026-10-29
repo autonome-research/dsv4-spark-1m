@@ -119,7 +119,7 @@ journalctl -k --since "<alert time - 5 min>" --until "<alert time + 5 min>"
 |---|---|
 | `MemAvailable<6GiB` | a request or another process is exhausting unified memory |
 | `boot:psi_some>40_for_30s`, `boot:D-state>60s` | boot mode only: sustained memory pressure or a long kernel block during start. Usually the KV-allocation stall (I02 class, roughly 1 boot in 3): clear and start again, and see [Boot stall](#boot-stall-at-kv-allocation-i02-class) |
-| `D-state>10s` | a process blocked in the kernel; `snapshot.json` lists `[pid, starttime]`. Check what the PID is: in the past it was `fstrim` (now ignored) and a guard left over from an earlier run |
+| `D-state>10s` | a process blocked in the kernel; `snapshot.json` lists `[pid, starttime]`. Check what the PID is: in the past it was `fstrim` (now ignored), a guard left over from an earlier run, and the daily `systemd-tmpfiles-clean` (2026-10-27; the PID's start time matched the service start in `journalctl`). While serving, the model keeps running; clear the alert before the next start |
 | `residual_growth>8GiB/10s+psi_stall` | serving mode only: memory outside the model grew by more than 8 GiB in 10 s while memory PSI was above 1 |
 
 ### Clear
@@ -242,7 +242,11 @@ hung-task, mt7925, NVRM or Xid line.
 
 Launcher edits keep the existing style: fail-closed checks, exact IDs, bounded
 timeouts on every remote call, and a comment that names the log entry that
-motivated the change.
+motivated the change. Patch files are never edited in place; a change is a new file
+with a new switch value ([patches.md](patches.md)).
+
+The DSpark experiment has its own procedure, switches, stop rules and rollback:
+[dspark-experiment.md](dspark-experiment.md).
 
 ---
 
