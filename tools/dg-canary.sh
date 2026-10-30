@@ -8,8 +8,8 @@
 #   status  container state, last load rounds, failure count
 #   stop    docker stop (the container is kept for inspection, as with the server)
 #
-# The canary is a GPU process, so the start preflight lists it as a blocker. Stop it
-# before a restart (docs/operations.md); a new canary per boot also restarts its clock.
+# The start preflight exempts exactly this container (name and dsv4.canary=I04 label) and
+# its GPU process, so it keeps running across server restarts (docs/operations.md, Start).
 set -uo pipefail
 NAME=dsv4-dg-canary
 IMG=local/vllm-openai:46638857-fi0618

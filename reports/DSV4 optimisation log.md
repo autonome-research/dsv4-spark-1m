@@ -1757,3 +1757,29 @@ Procedure and switches: `docs/dspark-experiment.md` (new). Plan approved by the 
 - **Reading the result:**
   - The canary fails at some uptime: the bug is reproduced outside vLLM. Step 3 (newer DeepGEMM) is then tested against the same canary.
   - It passes beyond 49 h: the trigger needs something in the serving process (load, memory, many loaded modules). Next would be a canary that also launches kernels or runs inside the server's container.
+
+### 2026-10-29 18:10 — Leader memory headroom lower on this boot [measured / inferred]
+- [measured] Boot itself was the same as earlier boots: "Model loading took 73.85 GiB" and "Initial free memory 111.06 GiB" (10-26/10-27 boots: 111.4–111.8). KV fixed at 10.5 GiB.
+- [measured] MemAvailable at 09:55 (boot-4k `.mon`): leader 20 GiB, worker 23 GiB. At 17:46–18:06 (canary log, `/proc/meminfo`): leader 14.5–14.7 GiB, worker 19 GiB. `nvidia-smi`: Worker_TP0 95,742 MiB, canary 249 MiB. Leader RSS: vLLM worker 5.0 GiB, API server 0.9, engine core 0.8, canary python3 0.8.
+- [inferred] Both ranks lost about 4 GiB between 09:55 and 17:46. The canary accounts for about 1 GiB more on the leader. In between came Velvet's requests and the shape warm-up with prompts up to 8,192 tokens. [hypothesis] PyTorch's caching allocator keeps the larger activation buffers reserved after the biggest prefill; not verified.
+- Earlier boots: about 20–22 GiB idle, with dips to 15–17 GiB only during long requests (E07, E12, final benchmark).
+- **Next:** at the next boot, record MemAvailable and `nvidia-smi` used memory after boot, after the 4K check, after the warm-up and after a 64K request, on both nodes.
+
+### 2026-10-29 18:22 — DSpark Stage 1 step 1 repeated: reference with DSpark off, all rungs passed [measured]
+- **Run:** `tools/dspark-ladder.sh ref-off check tiny 4k acc 65536` on the default boot (run dsv4-t2-20261029T164911Z-1572602) after the shape warm-up, with the canary running. User: "can we resume decode work". `data/DSPARK/20261029T182207-ref-off/`.
+- **Results:**
+  - check, tiny (10/10 "Paris. …"), 4k (27.04 / 27.03 / 26.89 tok/s), acc (the 52 prompts that crashed I04), 65536 (65,873 prompt tokens, TTFT 29.4 s, decode 27.04 tok/s, code found).
+  - The ranks agreed after every rung (up to 19,525 eager collectives). Health 200 afterwards.
+- **Accuracy reference:** `gemv-acc.py compare` against `patch-on-26h-20261025T141747.json` (same configuration, 10-25 boot) gives **identical 54/54, mean |Δlogprob| 0.00000**, accuracy 41/52 both. The new reference for DSpark is `data/GEMV/dspark-off-ref-off-20261029T182406.json`.
+- **I04 mitigation check:** the acc rung, which crashed the engine on 10-28, passed after the shape warm-up. [inferred] One pass is consistent with the mitigation, not proof; the canary carries on.
+- **Memory (new per-rung logging):**
+  - Unchanged through check, tiny, 4k and acc: leader 14.6 GiB / GPU 95,991 MiB; worker 19.0 GiB / 95,742 MiB.
+  - **After the 64K request, GPU memory stayed 1,960 MiB higher on both ranks** (leader 97,951 MiB, MemAvailable 13.0 GiB; worker 97,702 MiB, 17.1 GiB). The 8K warm-up prompts had not raised it further, because the 64K request was larger than anything earlier on this boot.
+  - [inferred] This supports the hypothesis that vLLM/PyTorch keep buffers sized by the largest request seen. Each new longest context costs free memory for the rest of the boot.
+  - [inferred] For DSpark: after a 1M request, idle headroom will be lower than the post-boot figure, so the 1M rung's memory must be judged from the ladder's per-rung lines, not from the boot figure.
+- **Changes in this step:**
+  - `start-dsv4-default.sh`: the preflight exempts only the container `dsv4-dg-canary` with label `dsv4.canary=I04` and GPU processes in its cgroup, and reports it on stderr. Everything else still blocks. Tested standalone: canary skipped, server still listed. Backup `.backups/start-dsv4-default.sh.bak-20261029-canary`.
+  - `tools/shape-warmup.py`: with DSpark on it uses `max_tokens` 8 (draft and verify kernels), `ignore_eos`, and records memory before and after (`memory.json`).
+  - `tools/dspark-ladder.sh`: logs MemAvailable and GPU memory on both nodes at the start and after every rung.
+  - `docs/operations.md`, `docs/dspark-experiment.md` (status, memory note, warm-up after every start), `tools/dg-canary.sh` header.
+- **Next:** Stage 1 step 2 onward (restart with DSpark arm A) needs a window agreed with Velvet, with Velvet reachable, and the user typing `START DSV4 T2`.

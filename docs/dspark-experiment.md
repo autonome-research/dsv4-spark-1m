@@ -6,9 +6,17 @@ cluster safely, and the record of what has been checked. Background, sources and
 estimate: `reports/research_notes/DSpark upstream survey/` (`notes.md`, `update-2026-10-28.md`).
 Every result goes into `reports/DSV4 optimisation log.md`.
 
-**Status (2026-10-28):** Stage 0 (offline checks) done. Stage 1 not started; it needs a
-window agreed with Velvet. DSpark is **off** in the default start and stays off until
-Stage 2.
+**Status (2026-10-29):** Stage 0 (offline checks) done. Stage 1 step 1 (reference, DSpark
+off) was interrupted on 2026-10-28 by an engine crash unrelated to DSpark (I04, a
+first-time DeepGEMM kernel load). It is mitigated by `tools/shape-warmup.py`, which now
+runs after every start, and step 1 is being repeated. Steps 2 onward need a window agreed
+with Velvet. DSpark is **off** in the default start and stays off until Stage 2.
+
+**Memory (2026-10-29):** the leader had 14.5 GiB free on the serving boot of 10-29, against
+about 20 GiB right after boot. Both ranks lost about 4 GiB after boot (optimisation log,
+2026-10-29 18:10). With DSpark's ~5 GiB that leaves about 9.5 GiB, below stop rule 3. So
+record memory after every step (`shape-warmup.py` writes `memory.json`; the ladder logs
+memory after every rung), and go past 64K only if the leader stays at 10 GiB or more.
 
 ## Contents
 
@@ -134,6 +142,15 @@ If the start fails with `KeyError` in `dspark.py` `load_weights` (#51916), clear
 alerts and start again with `DSV4_DSPARK_LOADFIX=1` added. Then look for the
 `DSV4 patch: skipped N unregistered DSpark expert params` warning in the leader log, and
 record N.
+
+After every start in this experiment, first run the shape warm-up (it detects DSpark and
+then generates 8 tokens per request, so the draft and verify kernels load at boot):
+
+```bash
+/srv/dsv4/run/tools/shape-warmup.py A
+```
+
+The kernel-load canary may keep running; the start check leaves it alone.
 
 **4. Arm A, short context first:**
 

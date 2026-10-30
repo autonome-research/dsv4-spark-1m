@@ -201,9 +201,15 @@ INVENTORY=$(cat <<"SNIP"
 set -uo pipefail
 self_re="dsv4-t2/guard[.]py|allocator-observer[.]sh|dsv4-t2-guard[.]py|dsv4-preflight-self-marker"
 proc_re="[v]llm|[p]ython.*serve"
+# The I04 kernel-load canary (tools/dg-canary.sh) must keep running across restarts: it
+# measures process uptime. Only the container with this exact name AND label, and GPU
+# processes inside it, are exempt; they are reported on stderr, not as blockers.
+canary=$(timeout --kill-after=2 15 docker ps -q --no-trunc --filter "name=^dsv4-dg-canary$" --filter "label=dsv4.canary=I04")
+[ -n "$canary" ] && echo "DSV4 T2: preflight: kernel-load canary ${canary:0:12} left running (I04; tools/dg-canary.sh)" >&2
 rows=$(timeout --kill-after=2 15 docker ps --no-trunc --format "{{.ID}}|{{.Names}}|{{.Image}}") || exit 2
 printf "%s\n" "$rows" | while IFS="|" read -r cid cname cimage; do
   [ -n "${cid:-}" ] || continue
+  [ -n "$canary" ] && [ "$cid" = "$canary" ] && continue
   printf "%s %s" "${cname:-}" "${cimage:-}" | grep -qiE "dsv4|[v]llm|[d]eepseek" || continue
   printf "container|%s|%s from image %s\n" "$cid" "${cname:-?}" "${cimage:-?}"
 done
@@ -218,6 +224,7 @@ gpu=$(timeout --kill-after=2 10 nvidia-smi --query-compute-apps=pid,process_name
 printf "%s\n" "$gpu" | while IFS="," read -r gpid gname gmem; do
   gpid=$(printf "%s" "${gpid:-}" | tr -dc "0-9")
   [ -n "$gpid" ] || continue
+  [ -n "$canary" ] && grep -q "$canary" "/proc/$gpid/cgroup" 2>/dev/null && continue
   gowner=$(ps -o user= -p "$gpid" 2>/dev/null | tr -d " ")
   printf "gpu|%s|user %s: %s using%s\n" "$gpid" "${gowner:-unknown}" "${gname:-?}" "${gmem:-?}"
 done

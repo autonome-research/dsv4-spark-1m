@@ -11,8 +11,11 @@ Loading them all right after boot removes that trigger. It does not explain the 
 
 What it does: sends one /v1/completions request per prompt length in LENGTHS, with a
 token-ID prompt (no chat template, no BOS added) so the prefill step is exactly that many
-tokens, and max_tokens 1 so there is no decode step. Random token IDs, so prompts never
-hit the prefix cache. Each response must report prompt_tokens == length.
+tokens, and max_tokens 1 so there is no decode step. With DSpark on (detected from the
+container args) each request generates 8 tokens instead, so the draft and 6-token verify
+kernels load too. Random token IDs, so prompts never hit the prefix cache. Each response
+must report prompt_tokens == length. MemAvailable and GPU memory on both nodes are
+recorded before and after (memory.json).
 Stops at the first failed request (exit 1). Before and after, it lists the DeepGEMM JIT
 cache on both nodes, so kernels compiled during the warm-up are recorded.
 
@@ -55,12 +58,36 @@ def dg_cache(remote):
     return set(out.stdout.split()) if out.returncode == 0 else None
 
 
+def spec_on():
+    """True if the serving container runs speculative decoding (DSpark)."""
+    out = subprocess.run(["docker", "inspect", "dsv4-leader", "--format", "{{join .Args \" \"}}"],
+                         capture_output=True, text=True)
+    return "--speculative-config" in out.stdout
+
+
+def memory():
+    """MemAvailable (GiB) and GPU memory used by compute processes (MiB) on both nodes."""
+    cmd = ("awk '/MemAvailable/{printf \"%.1f \", $2/1048576}' /proc/meminfo; "
+           "nvidia-smi --query-compute-apps=used_gpu_memory --format=csv,noheader,nounits "
+           "| awk '{s += $1} END {print s}'")
+    res = {}
+    for node, pre in (("leader", []), ("worker", ["timeout", "20", "ssh", "-o", "BatchMode=yes", PEER])):
+        out = subprocess.run(pre + ["bash", "-c", cmd] if not pre else pre + [cmd],
+                             capture_output=True, text=True).stdout.split()
+        res[node] = {"mem_available_gib": float(out[0]), "gpu_used_mib": int(out[1])} if len(out) == 2 else None
+    return res
+
+
 def main():
     label = sys.argv[1] if len(sys.argv) > 1 else sys.exit("usage: shape-warmup.py <label>")
     out = f"/srv/dsv4/run/data/WARMUP/{time.strftime('%Y%m%dT%H%M%S')}-{label}"
     os.makedirs(out)
     if running_requests() > 0:
         sys.exit("a request is running; nothing sent (retry when the server is idle)")
+    # With DSpark, the draft and the 6-token verify steps run only while decoding, so
+    # each request then generates 8 tokens (a draft round plus a verify step at least).
+    max_tokens = 8 if spec_on() else 1
+    mem_before = memory()
     before = {"leader": dg_cache(False), "worker": dg_cache(True)}
     rng = random.Random()
     t_all, failed = time.time(), None
@@ -69,8 +96,8 @@ def main():
             ids = [rng.randrange(VOCAB_LO, VOCAB_HI) for _ in range(n)]
             t0, rec = time.time(), {"length": n}
             try:
-                r = post("/v1/completions", {"model": MODEL, "prompt": ids, "max_tokens": 1,
-                                             "temperature": 0})
+                r = post("/v1/completions", {"model": MODEL, "prompt": ids, "max_tokens": max_tokens,
+                                             "temperature": 0, "ignore_eos": True})
                 rec["prompt_tokens"] = r["usage"]["prompt_tokens"]
                 rec["ok"] = rec["prompt_tokens"] == n
             except Exception as e:   # HTTP 500 = engine error; the server may now be down
@@ -89,9 +116,16 @@ def main():
             for k in sorted(after[node] - before[node]):
                 f.write(f"{node} {k}\n")
     new = sum(1 for _ in open(f"{out}/new-kernels.txt"))
+    mem_after = memory()
+    json.dump({"before": mem_before, "after": mem_after, "max_tokens": max_tokens},
+              open(f"{out}/memory.json", "w"), indent=1)
+    mem = "; ".join(f"{n} MemAvailable {mem_before[n]['mem_available_gib']} -> {mem_after[n]['mem_available_gib']} GiB, "
+                    f"GPU {mem_before[n]['gpu_used_mib']} -> {mem_after[n]['gpu_used_mib']} MiB"
+                    for n in ("leader", "worker") if mem_before[n] and mem_after[n])
     summary = (f"{'FAILED at length ' + str(failed['length']) + ': ' + failed.get('error', 'prompt_tokens mismatch') if failed else 'ok'}; "
                f"{len(LENGTHS) if not failed else LENGTHS.index(failed['length'])} of {len(LENGTHS)} lengths done "
-               f"in {time.time() - t_all:.0f} s; new DeepGEMM kernels: {new} (new-kernels.txt); output {out}")
+               f"in {time.time() - t_all:.0f} s, max_tokens {max_tokens}; new DeepGEMM kernels: {new} (new-kernels.txt); "
+               f"{mem}; output {out}")
     open(f"{out}/summary.txt", "w").write(summary + "\n")
     print(summary)
     sys.exit(1 if failed else 0)

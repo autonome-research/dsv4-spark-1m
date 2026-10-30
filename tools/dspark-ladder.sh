@@ -116,6 +116,13 @@ tiny() {   # 10 short greedy completions; the first DSpark request is where Velv
   done
 }
 
+# Memory after each rung, both nodes: where DSpark's extra ~5 GiB per node goes and whether
+# buffers stay reserved after large requests (optimisation log, 2026-10-29 18:10).
+memline() {
+  echo "MemAvailable $(awk '/MemAvailable/{printf "%.1f", $2/1048576}' /proc/meminfo) GiB, GPU $(nvidia-smi --query-compute-apps=used_gpu_memory --format=csv,noheader,nounits | awk '{s += $1} END {print s}') MiB"
+}
+log "start: memory now: $(memline) | worker $(wssh "$(declare -f memline); memline")"
+
 n=0
 for rung in "${RUNGS[@]}"; do
   n=$((n + 1)); name="$n-$rung"
@@ -138,5 +145,6 @@ for rung in "${RUNGS[@]}"; do
   [[ $rung == tiny ]] && log "$name: outputs $(python3 -I -c 'import json,sys; print(sorted({json.loads(l)["text"] for l in open(sys.argv[1])}))' "$OUT/$name.json")"
   accept_check "$name" "$before" "$after"
   nccl_check "$name"
+  log "$name: memory now: $(memline) | worker $(wssh "$(declare -f memline); memline")"
 done
 log "done: all rungs passed"
