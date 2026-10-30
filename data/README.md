@@ -42,6 +42,7 @@ timestamped directory.
 | `GEMV-bench/` | 2026-10-27 | `tools/gemv-bench.py` raw output, two runs |
 | `DSPARK-S0/` | DSpark Stage 0 | vLLM DSpark unit tests at commit 46638857, CPU (`pytest-cpu-<ts>.log`) |
 | `WARMUP/<ts>-<label>/` | I04 investigation, 2026-10-29 | `tools/shape-warmup.py` runs: `requests.jsonl` (length, prompt_tokens, seconds), `new-kernels.txt` (DeepGEMM kernels compiled during the run, per node), `summary.txt` |
+| `CANARY/<ts>-<label>/` | I04 investigation, 2026-10-29 | `tools/dg-canary.sh` runs: `config.txt` (kernels, interval, server run, driver), `canary.jsonl` (one line per load round: uptime, result of each driver call, libraries loaded, MemAvailable) |
 | `DSPARK/<ts>-<label>/` | DSpark Stage 1 | `tools/dspark-ladder.sh` runs: `config.txt`, `ladder.log`, per-rung output, memory monitor, spec-decode counters |
 | `RESTART/<ts>-<label>/` | R01.0–R01.6 | Per-boot 4K check (warm-up + 3) for each boot of the restart series |
 | `thermal/` | E13, R01.7 | `<host>-<date>.csv` for both nodes (worker files copied from `gx10:~/dsv4-thermal/`); no data 2026-10-23 → 2026-10-26 16:51 |

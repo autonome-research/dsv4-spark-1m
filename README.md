@@ -341,6 +341,7 @@ All benchmark tools are read-only towards the server and run one request at a ti
 tools/final-bench.sh [label]          # 4K ×3, 64K ×2, 256K, 1M; ~30 min → data/FINAL/<ts>/
 tools/run-guarded.sh 65536 data/r64k  # one ctxbench request under the memory watchdog
 tools/shape-warmup.py <label>         # per-boot kernel warm-up, run first (I04) → data/WARMUP/<ts>-<label>/
+tools/dg-canary.sh start <label>      # long-lived kernel-load canary (I04); status / stop → data/CANARY/
 tools/boot-4k.sh <label>              # per-boot 4K check (warm-up + 3) → data/RESTART/<ts>-<label>/
 tools/e16-ab.sh                       # indexer-mode A/B (split / rowshard / off) → data/E16/
 tools/gemv-acc.py run patch-on 2      # GEMV patch accuracy; then: gemv-acc.py compare a.json b.json

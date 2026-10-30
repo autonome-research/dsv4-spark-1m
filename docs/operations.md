@@ -49,6 +49,13 @@ utilisation, alert, recent key log lines).
 
 ### Start
 
+If the kernel-load canary is running (I04 investigation; `tools/dg-canary.sh status`),
+stop it first. It is a GPU process, so the preflight would list it as a blocker:
+
+```bash
+/srv/dsv4/run/tools/dg-canary.sh stop
+```
+
 ```bash
 /srv/dsv4/run/start-dsv4-default.sh
 ```

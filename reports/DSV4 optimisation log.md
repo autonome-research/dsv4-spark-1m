@@ -1737,3 +1737,23 @@ Procedure and switches: `docs/dspark-experiment.md` (new). Plan approved by the 
 - [inferred] This process now has every einsum and hc_prenorm count from 1 to 64 loaded, so the I04 trigger cannot recur on those paths during this boot. Steps of 65 to 8,191 tokens use the general large-M kernels, loaded at 80 tokens and above. The warm-up removes the trigger, not the cause of NOT_PERMITTED.
 - **Docs:** `docs/operations.md` (Start: run `shape-warmup.py`, then `boot-4k.sh`, after every start), README (tools), `data/README.md` (WARMUP row).
 - **Next:** step 2, a long-lived load canary to reproduce NOT_PERMITTED outside the server; step 3, a newer DeepGEMM as an opt-in mount.
+
+### 2026-10-29 17:46 — I04 step 2: kernel-load canary started (`tools/dg-load-canary.py`, `tools/dg-canary.sh`) [measured]
+- **Question:** does a first-time kernel load fail with NOT_PERMITTED once a CUDA process has been alive long enough, outside vLLM? (I04 at about 49 h, DeepGEMM #443 at 29 h.)
+- **Design:**
+  - One container, `dsv4-dg-canary`, on the leader, using the serving image, no network, and the DeepGEMM cache mounted read-only.
+  - It creates the primary context through torch and runs a small matmul every 60 s.
+  - Every 600 s it loads three cached cubins as new libraries with DeepGEMM's exact call sequence (`handle.hpp` l. 141–154): `cuLibraryLoadFromFile` → `cuLibraryGetKernelCount` (must be 1) → `cuLibraryEnumerateKernels` → `cuKernelGetFunction`. The three are the I04 kernel (einsum, 17 tokens), a linear-layer GEMM and an hc_prenorm GEMM.
+  - It never unloads (as DeepGEMM) and never stops on an error, so the log also shows whether a failure persists.
+  - Kernels are loaded, not launched (I04 failed at the load).
+- **Checks before the real run:**
+  - 5-s self-test: all four calls ok, context current, 249 MiB GPU memory.
+  - Negative checks: a missing file gives `CUDA_ERROR_FILE_NOT_FOUND (301)`. A non-cubin file loaded "ok" with 0 kernels, so I added DeepGEMM's kernel-count check; it now reports "kernel count 0, expected 1".
+  - The self-test container is kept as `dsv4-dg-canary-selftest-20261029` (stopped).
+- **Real run:** started 17:46:30 (`data/CANARY/20261029T174630-boot-20261029/`); first round ok. Server health 200 throughout.
+- Docker ignored `--memory 4g` on this kernel ("does not support memory limit capabilities"); the canary's memory shows in `canary.jsonl` (MemAvailable) and `nvidia-smi`.
+- **Leader MemAvailable while serving is 14.5 GiB** after the warm-up and with the canary, against about 21.7 GiB in earlier boots [measured now; earlier figure from the research update]. It is above the guard's 6 GiB floor. [inferred] The DSpark memory estimate (16 GiB idle, 11 GiB at the 1M peak) assumed 21.7 and must be rechecked before Stage 1.
+- **Procedure:** the canary is a GPU process, so the start preflight would list it. `docs/operations.md` now says to stop it before a restart (`tools/dg-canary.sh stop`).
+- **Reading the result:**
+  - The canary fails at some uptime: the bug is reproduced outside vLLM. Step 3 (newer DeepGEMM) is then tested against the same canary.
+  - It passes beyond 49 h: the trigger needs something in the serving process (load, memory, many loaded modules). Next would be a canary that also launches kernels or runs inside the server's container.
