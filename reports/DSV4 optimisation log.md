@@ -1808,3 +1808,32 @@ Procedure and switches: `docs/dspark-experiment.md` (new). Plan approved by the 
   DSpark costs +5.7 GB at boot and +7.7 GB after the warm-up, per rank. Correction to 08:20 [inferred]: most of the warm-up growth (7.2 of 9.2 GB) is not DSpark; the default server keeps it too, after the 8,192-token steps. Default after-boot free memory is 19.8 / 24.1 GiB (the "about 20 GiB" figure was the leader).
 - [hypothesis] The kept +7.2 GB scales with the prefill chunk (8,192), so a 4,096 chunk would roughly halve it and give arm A about 3.5 GB more per node. To test: one start with the smaller chunk, warm-up, compare GPU after warm-up.
 - The worker/leader asymmetry under arm A (MemAvailable -1.6 vs -8.6 GiB for the same +9.2 GB) is not repeated here (both -5.9 GiB for +7.2 GB); still unexplained.
+
+## 2026-10-30 13:05 PDT: DSpark arm A with 4,096-token prefill chunks: memory fits; 4K stopped on acceptance
+
+- Start [measured]: run dsv4-t2-20261030T195518Z-1983691, `DSV4_SPEC=on DSV4_PATCH=m1 DSV4_ASYNC=0 DSV4_PREFIX_CACHE=0 DSV4_MAX_BATCH=4096` (Velvet agreed the window). Args `--max-num-batched-tokens 4096 --kv-cache-memory-bytes 9663676416`, dspark k=5, prefix caching and async off. Healthy 13:01:23; "DSpark draft model loaded: 97 params"; no KeyError.
+- Memory [measured]: after boot leader 17.3 / worker 21.6 GiB MemAvailable, GPU 93,661 / 93,402 MiB. Warm-up `data/WARMUP/20261030T130136-A-4096/` ok 92/92 in 82 s, 0 new kernels; GPU +4.6 GB per rank (8,192 chunks: +9.2 GB); after warm-up leader **12.8** / worker **17.1** GiB. Stop rule 3 holds. The 13:00 hypothesis (kept memory scales with the prefill chunk) is supported: growth halved with half the chunk.
+- Ladder `data/DSPARK/20261030T130305-A4096-short/` [measured]:
+  - check: ranks agree.
+  - tiny (temperature 0, "The capital of France is", 32 tokens x 10): 10/10 identical, correct; acceptance **0.489** (220/450), 3.44 tokens per step; ranks agree; lowest MemAvailable 12 GiB.
+  - 4k (ctxbench 4096 x 512 x 3): decode **27.71 / 26.33 / 29.52** tok/s (DSpark off today: 26.77); acceptance **0.274** (887/3240), 2.37 tokens per step -> **stop rule 4**, ladder stopped, server left running.
+  - Accepted tokens per draft position, cumulative incl. tiny: 647 / 370 / 197 / 101 / 62.
+- Analysis:
+  - [measured] ctxbench's prompt is a log of random words from a 20-word list and sampling is temperature 0.6, so the continuation is close to unpredictable.
+  - [inferred] The low 4K acceptance is a property of this synthetic prompt, not a draft-loader defect: the per-position decay is smooth (about 0.5-0.6 per position), and the natural-text greedy rung reached 0.49. Rule 4 was written to catch a broken loader (near-zero acceptance); ctxbench is the wrong workload for it.
+  - [inferred] Cost per DSpark step: 1 / 26.8 tok/s = 37 ms per plain decode step; with 2.37 tokens per step at about 27.8 tok/s, one DSpark step (5 draft + 6-token verify) takes about 85 ms, 2.3x a plain step. At that cost DSpark breaks even at about 2.3 tokens per step and needs high acceptance to gain. Where the 85 ms goes is not measured.
+- Next: an `acc` rung (52 natural prompts, greedy) gives realistic acceptance, the output comparison with ref-off, and the break-even check; then a step-time profile of draft vs verify.
+
+## 2026-10-30 13:20 PDT: DSpark arm A (4,096 chunks): accuracy rung and decode speed on natural prompts
+
+- acc rung `data/DSPARK/20261030T131455-A4096-acc/` [measured]: 41/52 correct (ref-off 41/52); identical outputs 49/54 against `data/GEMV/dspark-off-ref-off-20261029T182406.json`, first divergences at tokens 1, 1, 8, 29, 52, mean |dlogprob| 0.019 (max 0.60); acceptance **0.432** (462/1070), **3.16** tokens per step; ranks agree; MemAvailable lowest 12 GiB. Note two changes against the reference (DSpark and 4,096 chunks).
+- New tool `tools/natbench.py` [measured]: 3 natural chat prompts (technical explanation, code, story), streaming, 512 tokens, ignore_eos. Data `data/DSPARK/20261030T1316-A4096-natural/`.
+
+  | prompt | temp 0 | temp 0.6 |
+  |---|---|---|
+  | TCP explanation | 46.98 | 35.63 |
+  | Python CSV code | 50.59 | 49.32 |
+  | lighthouse story | 29.82 | 29.52 |
+
+  Over the 6 requests: acceptance 0.376 (2010/5345), 2.88 tokens per step.
+- [inferred] Against about 26.8 tok/s with DSpark off (4K ctxbench, today), DSpark gives about +75-90 % on technical and code text and about +10 % on a story. Not yet measured: the same natbench prompts with DSpark off (plain decode speed is assumed content-independent; to confirm after rollback), and long context with DSpark.
