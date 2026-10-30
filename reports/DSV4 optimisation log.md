@@ -1783,3 +1783,28 @@ Procedure and switches: `docs/dspark-experiment.md` (new). Plan approved by the 
   - `tools/dspark-ladder.sh`: logs MemAvailable and GPU memory on both nodes at the start and after every rung.
   - `docs/operations.md`, `docs/dspark-experiment.md` (status, memory note, warm-up after every start), `tools/dg-canary.sh` header.
 - **Next:** Stage 1 step 2 onward (restart with DSpark arm A) needs a window agreed with Velvet, with Velvet reachable, and the user typing `START DSV4 T2`.
+
+## 2026-10-30 08:20 PDT: DSpark Stage 1 step 3 (arm A start) and warm-up; stop rule 3 broken
+
+- Step 2/3 [measured]: default run dsv4-t2-20261029T164911Z-1572602 stopped (`launch-dsv4.sh down`; guards left 0/0), alerts cleared on both nodes. The first start attempt (run …T145745Z-1855729) got no DSV4_* variables (they were typed on a separate line; banner said "speculative decoding off") and did not create containers. Arm A run dsv4-t2-20261030T145939Z-1857765: args `--speculative-config {"method":"dspark","num_speculative_tokens":5,"draft_sample_method":"probabilistic"} --no-enable-prefix-caching --no-async-scheduling`; no KeyError, "DSpark draft model loaded: 97 params"; healthy 08:06:45 (about 5 min). Canary left running by the preflight, as designed.
+- Memory right after boot [measured]: leader MemAvailable 14.7 GiB, worker 11.0 GiB; GPU 95,528 MiB per rank (default boot yesterday: about 20 GiB free per node, so DSpark costs about 5-9 GiB per node).
+- Shape warm-up (`data/WARMUP/20261030T080702-A/`) [measured]: ok, 92/92 lengths, max_tokens 8, 512 s, 26 new DeepGEMM kernels per node. GPU 95,785 -> 104,983 MiB (leader) and 95,528 -> 104,726 MiB (worker): +9.2 GB per rank, kept after the warm-up. MemAvailable leader 14.9 -> 6.3 GiB, worker 11.3 -> 9.7 GiB (lowest during the run: same). Leader after: MemFree 6.8 GiB, Cached 2.8 GiB, Shmem 2.5 GiB, no swap.
+- Stop rule 3 (MemAvailable >= 10 GiB on both nodes) is broken on both nodes before any ladder rung; the leader is 0.3 GiB above the guard's 6 GiB alert floor. No ladder rung was run.
+- Why the leader drops 8.6 GiB but the worker only 1.6 GiB for the same +9.2 GB GPU growth is not explained [hypothesis: the worker's MemAvailable before the warm-up undercounted reclaimable memory, or the GPU figure includes memory the worker had already committed].
+- [inferred] The +9.2 GB is allocator cache from the largest warm-up steps (8,192-token prefill with the DSpark drafter and verify), kept by the caching allocator, like the +1.96 GB after the 64K request on 2026-10-29. Arm A with the current KV cache (10.5 GiB) and prefill chunk (8,192) does not fit the 10 GiB floor once a full prefill chunk has run.
+- Next: recommendation to the user is rollback to the default configuration. Options for a later arm A: smaller prefill chunk for the experiment, smaller KV cache (shorter max context), or measuring how much of the 9.2 GB is the drafter.
+
+## 2026-10-30 12:00 PDT: rollback to default after arm A; memory comparison
+
+- Rollback [measured]: arm A run …T145939Z-1857765 stopped at about 11:49 (guards left 0/0), alerts cleared, default start run dsv4-t2-20261030T184928Z-1931992 (`--enable-prefix-caching --async-scheduling`, no speculative config), healthy 11:54:46. Canary left running (95+ rounds, 0 failed). No user request reached arm A: 92 requests, all from the warm-up.
+- Warm-up `data/WARMUP/20261030T115456-rollback/` [measured]: ok 92/92 in 40 s, 0 new kernels. 4K check (`boot-4k.sh rollback`): decode median 26.77 tok/s (26.75-26.79), TTFT 1.7 s, within the expected 26.7-27.3.
+- Memory, same boot procedure, per rank [measured]:
+
+  | | GPU after boot | GPU after warm-up | warm-up growth | leader / worker MemAvailable after warm-up |
+  |---|---|---|---|---|
+  | default | 90,111 MiB | 97,333 MiB | +7.2 GB | 13.9 / 18.2 GiB |
+  | arm A (DSpark k=5) | 95,785 MiB | 104,983 MiB | +9.2 GB | 6.3 / 9.7 GiB |
+
+  DSpark costs +5.7 GB at boot and +7.7 GB after the warm-up, per rank. Correction to 08:20 [inferred]: most of the warm-up growth (7.2 of 9.2 GB) is not DSpark; the default server keeps it too, after the 8,192-token steps. Default after-boot free memory is 19.8 / 24.1 GiB (the "about 20 GiB" figure was the leader).
+- [hypothesis] The kept +7.2 GB scales with the prefill chunk (8,192), so a 4,096 chunk would roughly halve it and give arm A about 3.5 GB more per node. To test: one start with the smaller chunk, warm-up, compare GPU after warm-up.
+- The worker/leader asymmetry under arm A (MemAvailable -1.6 vs -8.6 GiB for the same +9.2 GB) is not repeated here (both -5.9 GiB for +7.2 GB); still unexplained.
