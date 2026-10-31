@@ -35,6 +35,9 @@ VOCAB_LO, VOCAB_HI = 1000, 120000   # ordinary tokens; vocab is 129,280, special
 LENGTHS = list(range(1, 65)) + [80, 96, 112, 128, 160, 192, 224, 256, 320, 384, 448, 512,
                                 640, 768, 896, 1024, 1280, 1536, 1792, 2048, 2560, 3072,
                                 3584, 4096, 5120, 6144, 7168, 8192]
+# WARMUP_MAX_LEN caps the lengths at the prefill chunk: with 4,096-token chunks, longer
+# prompts only repeat 4,096-token steps and keep more allocator blocks (log 2026-10-30).
+LENGTHS = [n for n in LENGTHS if n <= int(os.environ.get("WARMUP_MAX_LEN", "8192"))]
 
 
 def post(path, payload, timeout=300):

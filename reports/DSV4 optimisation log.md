@@ -1837,3 +1837,48 @@ Procedure and switches: `docs/dspark-experiment.md` (new). Plan approved by the 
 
   Over the 6 requests: acceptance 0.376 (2010/5345), 2.88 tokens per step.
 - [inferred] Against about 26.8 tok/s with DSpark off (4K ctxbench, today), DSpark gives about +75-90 % on technical and code text and about +10 % on a story. Not yet measured: the same natbench prompts with DSpark off (plain decode speed is assumed content-independent; to confirm after rollback), and long context with DSpark.
+
+## 2026-10-30 14:52 PDT: DSpark arm A (4,096 chunks): 64K rung passes
+
+- Velvet agreed to extend the window for this test (the original hour had ended at about 13:55; no Velvet requests reached arm A, 165 requests in total, all ours).
+- `data/DSPARK/20261030T145155-A4096-64k/` [measured]: 65,873 prompt tokens, TTFT **31.8 s** (ref-off with 8,192 chunks, 2026-10-29: 29.4 s), decode **37.68 tok/s** (ref-off: 27.04), hidden code found; acceptance 0.440 (33/75 draft tokens), 3.20 tokens per step; NCCL ranks agree (258,818 eager collectives); lowest MemAvailable 11 GiB.
+- Memory after the request: leader 11.0 / worker 15.4 GiB, GPU 99,989 / 99,728 MiB (+1.76 GB per rank kept after the 64K request, as with DSpark off on 2026-10-29: +1.96 GB).
+- [inferred] Decode figure rests on a short answer (75 draft tokens, about 15 DSpark steps), so it is a small sample. TTFT +8 % against ref-off mixes two changes (4,096 chunks and DSpark). Leader now 1 GiB above the stop-rule floor, so 256K and larger need a check of where the kept memory goes before they run.
+- Next: rollback to the default (user), then warm-up, 4K check and `tools/natbench.py` with DSpark off for the same-prompt comparison.
+
+## 2026-10-30 14:58 PDT: DSpark arm A (4,096 chunks): 256K rung stopped by the memory watchdog; tests paused
+
+- User: "we have time and access … don't worry about sparks being down", so the 256K rung ran on the same arm A server.
+- `data/DSPARK/20261030T145350-A4096-256k/` [measured]: start leader 10.9 / worker 15.4 GiB MemAvailable. During prefill the leader fell to 6 GiB and then 5 GiB at 14:57:52 (worker 10 GiB); the ladder watchdog killed the client and stopped (exit 4). No result, no decode figure. vLLM then showed 0 running requests (the disconnect aborted the request).
+- After [measured]: leader MemAvailable 5.7-6.0 GiB, worker 10.8 GiB; leader GPU 105,048 MiB (+5.1 GB kept since the 64K rung, +11.4 GB since after the warm-up). Server still healthy (200).
+- Guard [measured]: the leader has a latched `ALERT` "D-state>10s" dated 14:09:21 PDT, in an idle period between the natbench run (about 13:20) and the 64K rung (14:51); its cause is not investigated yet. The guard did not stop the server.
+- [inferred] With DSpark, memory kept by the allocator grows with context length (64K +1.8 GB, 256K +5.1 GB more, per rank), on top of DSpark's fixed +5.7 GB. On the default server 1M ran with the leader at 16 GiB lowest, so the growth with context exists there too but fits; with DSpark it does not fit beyond 64K on the leader. 660K and 1M are not possible in this configuration.
+- User asked to stop the tests for now (14:59). No test client is running. The arm A server is still up and needs the rollback (human), plus clearing the latched alert.
+
+## 2026-10-30 19:10 PDT: where the long-context memory goes with DSpark (read-only analysis)
+
+- State [measured]: arm A run …T195518Z-1983691 still serving, idle; leader MemAvailable 5.6 GiB, worker 10.6 GiB; leader ALERT (D-state>10s, 14:09:21) still latched.
+- 256K memory curve [measured, `1-262144.mon`]: leader 10 GiB at start, 7 GiB after about 1 min, 6 GiB from about 2 min, 5 GiB at 4 min (watchdog). The fall is gradual while prefill passes the longest context seen before (64K), i.e. it grows with context.
+- Default server at 256K, earlier boots [measured, E11/E14]: leader lowest 14 GiB from about 21 GiB, about 7 GB of growth; at 1M lowest 16 GiB [E12b, E15]. So the target model alone already needs about 6-7 GB of transient memory at long context, which does not grow further from 256K to 1M. [inferred] This is not DSpark-specific.
+- DSpark draft model [measured, `vllm/models/deepseek_v4/nvidia/dspark.py`]: 3 full `DeepseekV4DecoderLayer`s with their own `topk_indices_buffer` (max_num_batched_tokens x index_topk int32) and sliding-window context KV written per prefill chunk from the target's hidden states. Nothing in it is obviously sized by context length.
+- Allocator [measured]: `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:False` is set on purpose in `node-launch.sh` (step-1 hardening 2026-10-11: "expandable segments fragment unified memory under long-context KV growth").
+- [hypothesis] The PyTorch caching allocator keeps every block it reserved (warm-up +4.6 GB, 64K +1.8 GB) and these cached blocks are not reusable for the larger 256K buffers, so each new longer context adds on top of what is already kept. Under this hypothesis a fresh arm A boot running 256K first would need about 7 GB, from 17.3 GiB, leaving about 10 GiB.
+- Proposed test (one restart): fresh arm A (4,096 chunks), then 256K first (before the warm-up and before any other long request), recording memory; then 64K; then the warm-up. If 256K fits on a fresh boot, the problem is retention between requests, not peak need.
+
+## 2026-10-30 19:45 PDT: fresh arm A boot, 256K first: passes, but memory does not meet the 10 GiB rule
+
+- Restart by the user (alerts cleared): run dsv4-t2-20261031T023556Z-2097242, same arm A settings (4,096 chunks, KV 9 GiB, DSpark k=5, async and prefix caching off). Healthy 19:41:35. KV capacity 1,747,385 tokens (1.67x of 1M).
+- Memory at boot [measured]: leader 14.7 GiB, worker 21.5 GiB (the 13:01 arm A boot had 17.3 / 21.6; the leader difference is not explained; a second Claude session and Velvet's `pi` also run on the leader now).
+- 256K as the first request, no warm-up before it (`data/DSPARK/20261030T194139-A4096-fresh-256k/`) [measured]: 261,619 prompt tokens, TTFT **218.2 s** (1,199 tok/s; default with 8,192 chunks and no DSpark: 163-170 s), decode **45.01 tok/s**, code found. Leader fell 14 -> 7 GiB (lowest 7), worker 21 -> 12 GiB; leader GPU 93,665 -> 102,829 MiB (+9.2 GB). The ladder stopped on rule 3 (7 < 10 GiB) after the rung completed.
+- The 19:10 hypothesis (retention between requests is the whole problem) is **rejected** [measured]: 256K alone needs about 7.5 GiB of leader MemAvailable and +9.2 GB GPU per rank on a fresh DSpark boot (default server, earlier boots: about 7 GB). Retention adds to it (warm-up +4.6 GB, 64K +1.8 GB), so the combination fails.
+- Budget on the leader [inferred]: boot 14.7-17.3 GiB, minus about 7.5 GiB for a long request, minus about 4.6 GB kept from the warm-up, leaves 2.6-5 GiB, below both the 10 GiB rule and the guard's 6 GiB floor. About 5-7 GB per node must be found for DSpark at long context with the warm-up.
+- Guard [measured]: a new leader ALERT "residual_growth>8GiB/10s+psi_stall" latched at 19:41:33, two seconds before /health turned 200, i.e. at the boot-to-serving switch. Did not stop the server. Not yet investigated.
+- Candidates: (1) smaller KV cache: 9 GiB gives 1.67x of 1M; one request needs 1.0x, so about 6.5 GiB (expected about 1.26M tokens if linear, to be measured) frees about 2.5 GiB per node; (2) warm-up lengths capped at the 4,096 chunk (lengths above it only repeat 4,096-token steps but may keep extra blocks); (3) whether a fixed reserve such as the KV for draft layers can shrink.
+
+## 2026-10-30 20:52 PDT: arm A with KV 6.5 GiB: 256K and 1M pass with DSpark
+
+- Start (user, alerts cleared): run dsv4-t2-20261031T032732Z-2140184, `DSV4_SPEC=on DSV4_PATCH=m1 DSV4_ASYNC=0 DSV4_PREFIX_CACHE=0 DSV4_MAX_BATCH=4096 DSV4_KV_CACHE_BYTES=6979321856`. Healthy 20:33:11, no ALERT. KV capacity **1,261,879 tokens (1.20x of 1M)**, linear with the bytes as predicted. Boot memory: leader **19.6** / worker 24.1 GiB.
+- 256K first (`data/DSPARK/20261030T203317-A4096-kv65-256k/`) [measured]: 261,619 tokens, TTFT **150.0 s**, decode 33.07 tok/s, code found; lowest leader MemAvailable **10 GiB** (rule 3 met); acceptance 0.250 on 120 draft tokens (24 steps) tripped rule 4. [inferred] Rule 4 on such a small sample is noise: the same prompt gave 45.0 tok/s at 19:45. TTFT 150 s against 218 s on the 19:41 boot with the same settings except KV 9 GiB; not explained.
+- 1M (`data/DSPARK/20261030T203611-A4096-kv65-1m/`) [measured]: 1,036,267 tokens, TTFT **872.2 s** (1,188 tok/s; default 8,192 chunks, split indexer: 813.7-820.3 s), decode **34.57 tok/s** (default 1M: 24.76, E07.6), code found (39623663, same as E12b). Leader 10 -> 9 GiB lowest (rule 3 stop after the rung), worker 15 GiB. Rank check after it (`…A4096-kv65-after1m`): NCCL ranks agree (60,167 eager collectives).
+- Warm-up capped at 4,096 (`WARMUP_MAX_LEN=4096`, new option in `tools/shape-warmup.py`; `data/WARMUP/20261030T205119-A-kv65-cap4096/`) [measured]: ok 88/88 in 69 s, 0 new kernels, memory unchanged (leader 9.9 GiB, +44 MiB GPU): after long requests the warm-up reuses blocks already kept.
+- [inferred] With KV 6.5 GiB, DSpark serves 1M on 2x GB10, correctly, with the leader at about 9 GiB lowest in the order 256K -> 1M -> warm-up. Still open: the real order (boot -> warm-up -> long request), where the warm-up's blocks were not reused by 256K on the 13:01 boot. To be measured at the next boot (arm B).
