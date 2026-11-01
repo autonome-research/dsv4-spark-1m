@@ -1,13 +1,19 @@
 #!/usr/bin/env python3
 """E12b serving check: a deterministic long prompt with a hidden fact, greedy decoding.
 Same prompt every run for a given context, so outputs with the split indexer on and
-off can be compared token for token. Usage: e12b_client.py <ctx> <label>"""
-import json, random, sys, time, urllib.request
+off can be compared token for token. Usage: e12b_client.py <ctx> <label>
+E12B_LONG=1: long-answer mode for decode speed at long context (log 2026-10-31). The
+question also asks for a 400-word explanation, and 512 tokens are generated with
+ignore_eos; the default 64-token answer is too short to time decode (+-12 %)."""
+import json, os, random, sys, time, urllib.request
 BASE, MODEL = "http://127.0.0.1:8888", "deepseek-v4-flash-0731"
 def post(path, payload, timeout=600):
     r = urllib.request.Request(BASE+path, data=json.dumps(payload).encode(), headers={"Content-Type": "application/json"})
     return json.load(urllib.request.urlopen(r, timeout=timeout))
 target, label = int(sys.argv[1]), sys.argv[2]
+LONG = os.environ.get("E12B_LONG") == "1"
+LONG_Q = (" After that, write a detailed explanation of about 400 words of how a careful reader"
+          " would search a very long log for one fact, step by step.") if LONG else ""
 rng = random.Random(target)        # fixed per context length
 words = "river stone lantern orbit velvet copper meadow signal harbor ember quartz falcon thicket prism glacier tundra compass saffron basalt cinder".split()
 def filler(n):
@@ -19,7 +25,7 @@ a, b = filler(int(n_words * 0.37)), filler(n_words - int(n_words * 0.37))
 code = f"{rng.randrange(10**7, 10**8)}"
 prompt = (f"Below is a long log of random words. Somewhere in it is one sentence with a code.\n\n{a}\n\n"
           f"The vault code is {code}.\n\n{b}\n\n"
-          "Question: what is the vault code? Answer with the number first, then describe in two sentences where in the log it appeared.")
+          "Question: what is the vault code? Answer with the number first, then describe in two sentences where in the log it appeared." + LONG_Q)
 n_prompt = post("/tokenize", {"model": MODEL, "prompt": prompt})["count"]
 # The word counter in the filler grows longer with depth, so near 1M the estimate
 # overshoots (E12b: 1,058,675 tokens for target 1,036,288, HTTP 400). Shrink only
@@ -32,10 +38,10 @@ for _ in range(3):
     code = f"{rng.randrange(10**7, 10**8)}"
     prompt = (f"Below is a long log of random words. Somewhere in it is one sentence with a code.\n\n{a}\n\n"
               f"The vault code is {code}.\n\n{b}\n\n"
-              "Question: what is the vault code? Answer with the number first, then describe in two sentences where in the log it appeared.")
+              "Question: what is the vault code? Answer with the number first, then describe in two sentences where in the log it appeared." + LONG_Q)
     n_prompt = post("/tokenize", {"model": MODEL, "prompt": prompt})["count"]
-payload = {"model": MODEL, "messages": [{"role": "user", "content": prompt}], "max_tokens": 64,
-           "temperature": 0.0, "seed": 0, "stream": True, "stream_options": {"include_usage": True},
+payload = {"model": MODEL, "messages": [{"role": "user", "content": prompt}], "max_tokens": 512 if LONG else 64,
+           "ignore_eos": LONG, "temperature": 0.0, "seed": 0, "stream": True, "stream_options": {"include_usage": True},
            "chat_template_kwargs": {"thinking": False}, "logprobs": True}
 req = urllib.request.Request(BASE+"/v1/chat/completions", data=json.dumps(payload).encode(), headers={"Content-Type": "application/json"})
 t0 = time.time(); t_first = t_last = None; text = []; toks = []; usage = None

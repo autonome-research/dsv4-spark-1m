@@ -8,15 +8,20 @@
 #   2. the answer is right (e12b_client hidden code) and the request did not fail;
 #   3. MemAvailable stays >= 10 GiB on both nodes (watchdog aborts the request below 6 GiB,
 #      as e16-ab.sh does);
-#   4. with DSpark on, draft acceptance >= 40 % (lower means a draft-loader defect).
+#   4. with DSpark on, draft acceptance >= 40 % (lower means a draft-loader defect), judged
+#      only on rungs with natural text and at least MIN_DRAFT_TOKENS draft tokens: the 4k
+#      rung's random-word prompt and short answers gave 25-37 % from a working drafter
+#      (log 2026-10-31), so there the rate is logged but does not stop the ladder.
 # The first broken rule stops the ladder with exit code 4 and the reason in ladder.log; the
 # server is left as it is for diagnosis (py-spy, logs), then the operator rolls back.
 #
 # Usage: dspark-ladder.sh <label> [rung...]
 #   rungs: check (no request: only the rank and metrics checks; use it first, as a baseline),
 #          tiny (10 short greedy completions), 4k (ctxbench 4096 x 512, x3), acc (the 52 fixed
-#          prompts of gemv-acc.py, for the DSpark-on vs -off comparison), or a context size in
-#          tokens for e12b_client (65536, 262144, 660000, 1036288).
+#          prompts of gemv-acc.py, for the DSpark-on vs -off comparison), nat (natbench.py:
+#          3 natural prompts x 512 tokens, temperature 0 and 0.6), a context size in tokens
+#          for e12b_client (65536, 262144, 660000, 1036288), or long<size> (the same with
+#          E12B_LONG=1: 512-token answer, for decode speed at long context).
 #   default rungs: tiny 4k acc 65536
 # Output: /srv/dsv4/run/data/DSPARK/<timestamp>-<label>/
 #   config.txt (serving config), ladder.log, <n>-<rung>.json (client stdout), .err, .mon
@@ -29,6 +34,7 @@ LDIAG=/srv/dsv4/diagnostics/$(hostname)
 WDIAG=/srv/dsv4/diagnostics/gx10-6d0c
 MIN_AVAIL_GIB=10        # stop rule 3 (plan); the e16-ab.sh watchdog floor of 6 GiB still applies
 MIN_ACCEPT=0.40         # stop rule 4
+MIN_DRAFT_TOKENS=500    # rule 4 needs at least this many draft tokens in the rung
 
 LABEL=${1:?usage: dspark-ladder.sh <label> [rung...]}; shift
 RUNGS=("$@"); (( ${#RUNGS[@]} )) || RUNGS=(tiny 4k acc 65536)
@@ -78,7 +84,7 @@ nccl_check() {   # $1 = step name; equal multisets, retried while the logs settl
 # --- Stop rule 4: acceptance from the server's counters ------------------------------------
 metrics() { curl -s -m 10 "$API/metrics" | grep -E '^vllm:spec_decode_num_(drafts|draft_tokens|accepted_tokens)(_total)?\{' ; }
 sum_metric() { awk -v m="$1" '$1 ~ "^"m"(_total)?[{]" {s += $NF} END {printf "%d", s}' <<<"$2"; }
-accept_check() {   # $1 = step name, $2/$3 = metrics before/after
+accept_check() {   # $1 = step name, $2/$3 = metrics before/after, $4 = enforce (1) or log only (0)
   [[ $SPEC == on ]] || return 0
   local dt at nd
   dt=$(( $(sum_metric vllm:spec_decode_num_draft_tokens "$3") - $(sum_metric vllm:spec_decode_num_draft_tokens "$2") ))
@@ -86,6 +92,8 @@ accept_check() {   # $1 = step name, $2/$3 = metrics before/after
   nd=$(( $(sum_metric vllm:spec_decode_num_drafts "$3") - $(sum_metric vllm:spec_decode_num_drafts "$2") ))
   (( dt > 0 )) || { log "$1: no drafts counted"; return 0; }
   log "$1: acceptance $(awk -v a="$at" -v d="$dt" 'BEGIN {printf "%.3f", a / d}') ($at/$dt draft tokens), mean tokens per step $(awk -v a="$at" -v n="$nd" 'BEGIN {printf "%.2f", 1 + a / n}')"
+  [[ ${4:-1} == 1 ]] || { log "$1: acceptance logged only (synthetic prompt)"; return 0; }
+  (( dt >= MIN_DRAFT_TOKENS )) || { log "$1: acceptance not judged ($dt < $MIN_DRAFT_TOKENS draft tokens)"; return 0; }
   awk -v a="$at" -v d="$dt" -v m="$MIN_ACCEPT" 'BEGIN {exit !(a / d < m)}' && stop "$1: acceptance below $MIN_ACCEPT"
   return 0
 }
@@ -133,6 +141,12 @@ for rung in "${RUNGS[@]}"; do
     tiny) run_watched "$name" tiny ;;
     4k)   run_watched "$name" bash -c "for i in 1 2 3; do python3 -I '$T/ctxbench.py' 4096 512 || exit 1; done" ;;
     acc)  run_watched "$name" python3 -I "$T/gemv-acc.py" run "dspark-$SPEC-$LABEL" 1 ;;
+    nat)  run_watched "$name" bash -c "python3 -I '$T/natbench.py' 0 && python3 -I '$T/natbench.py' 0.6" ;;
+    long[0-9]*)
+      run_watched "$name" env E12B_LONG=1 python3 -I "$T/e12b_client.py" "${rung#long}" "$LABEL"
+      python3 -I -c 'import json,sys; sys.exit(0 if json.load(open(sys.argv[1]))["code_found"] else 1)' "$OUT/$name.json" ||
+        stop "$name: hidden code not found (wrong answer)"
+      log "$name: $(python3 -I -c 'import json,sys; d=json.load(open(sys.argv[1])); print({k: d[k] for k in ("prompt_tokens","ttft_s","decode_tok_s","code_found")})' "$OUT/$name.json")" ;;
     [0-9]*)
       run_watched "$name" python3 -I "$T/e12b_client.py" "$rung" "$LABEL"
       python3 -I -c 'import json,sys; sys.exit(0 if json.load(open(sys.argv[1]))["code_found"] else 1)' "$OUT/$name.json" ||
@@ -142,8 +156,10 @@ for rung in "${RUNGS[@]}"; do
   esac
   after=$(metrics); printf '%s\n' "$after" >"$OUT/metrics-$n.txt"
   [[ $rung == 4k ]] && log "$name: decode tok/s $(python3 -I -c 'import json,sys; print([json.loads(l)["decode_tok_s"] for l in open(sys.argv[1])])' "$OUT/$name.json")"
+  [[ $rung == nat ]] && log "$name: decode tok/s $(python3 -I -c 'import json,sys; print([json.loads(l)["decode_tok_s"] for l in open(sys.argv[1])])' "$OUT/$name.json")"
   [[ $rung == tiny ]] && log "$name: outputs $(python3 -I -c 'import json,sys; print(sorted({json.loads(l)["text"] for l in open(sys.argv[1])}))' "$OUT/$name.json")"
-  accept_check "$name" "$before" "$after"
+  enforce=1; [[ $rung == 4k ]] && enforce=0
+  accept_check "$name" "$before" "$after" "$enforce"
   nccl_check "$name"
   log "$name: memory now: $(memline) | worker $(wssh "$(declare -f memline); memline")"
 done

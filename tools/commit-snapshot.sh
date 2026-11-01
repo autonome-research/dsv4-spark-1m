@@ -7,5 +7,5 @@ cd /srv/dsv4/run
 cp -p "$HOME/reports/DSV4 optimisation log.md" "$HOME/reports/DSV4 final report.md" reports/
 git add -A
 git diff --cached --quiet && { echo "nothing changed"; exit 0; }
-git commit -q -m "${1:?commit message}" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git commit -q -m "${1:?commit message}"
 git log --oneline -1

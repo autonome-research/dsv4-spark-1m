@@ -481,6 +481,18 @@ wait_for_api; readiness_rc=$?
 if (( readiness_rc != 0 )); then
   fail "API readiness failed (rc=$readiness_rc); coordinated abort requested"
 fi
+# With DSpark the draft model loads after "Loading weights took" and reads the checkpoint
+# again, refilling about 10 GiB of page cache after the post-load reclaim (log 2026-10-31,
+# I05). Low MemFree then makes later GPU growth go through direct compaction, so reclaim
+# once more now that nothing is allocating.
+if [[ $SPEC_MODE == on ]]; then
+  if timed 60 sudo -n /usr/local/sbin/gb10-reclaim >/dev/null 2>&1 &&
+     ssh_timed 'timeout 60 sudo -n /usr/local/sbin/gb10-reclaim' >/dev/null 2>&1; then
+    echo "[$(date +%T)] post-ready reclaim (DSpark) done on both nodes" >>"$STATE/runs/$RUN_ID/postload.log"
+  else
+    echo "DSV4 T2: WARNING: post-ready reclaim (DSpark) failed; MemFree may stay low" >&2
+  fi
+fi
 # Leave boot mode: from here the guards apply the strict serving rules again.
 touch "$STATE/runs/$RUN_ID/leader/serving" || fail 'could not switch leader guard to serving mode'
 ssh_timed "touch ~/.cache/dsv4-t2/runs/'$RUN_ID'/worker/serving" || fail 'could not switch worker guard to serving mode'

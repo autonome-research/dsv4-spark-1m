@@ -1,0 +1,3 @@
+# Worker user crontab (log 2026-11-01): thermal log and peer host watch start at every boot.
+@reboot THERMLOG_DIR=/home/the user account/dsv4-thermal setsid bash /home/the user account/dsv4-thermlog.sh >/dev/null 2>>/home/the user account/dsv4-thermal/thermlog.err
+@reboot setsid bash /home/the user account/dsv4-hostwatch.sh spark-61dd 192.168.200.10 192.168.201.10 >/dev/null 2>&1

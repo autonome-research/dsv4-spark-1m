@@ -6,17 +6,17 @@ cluster safely, and the record of what has been checked. Background, sources and
 estimate: `reports/research_notes/DSpark upstream survey/` (`notes.md`, `update-2026-10-28.md`).
 Every result goes into `reports/DSV4 optimisation log.md`.
 
-**Status (2026-10-29):** Stage 0 (offline checks) done. Stage 1 step 1 (reference, DSpark
-off) was interrupted on 2026-10-28 by an engine crash unrelated to DSpark (I04, a
-first-time DeepGEMM kernel load). It is mitigated by `tools/shape-warmup.py`, which now
-runs after every start, and step 1 is being repeated. Steps 2 onward need a window agreed
-with Velvet. DSpark is **off** in the default start and stays off until Stage 2.
+**Status (2026-11-01):** Stage 0 done. Stage 1 ran arms A and B (2026-10-30/31); results
+are in [Stage 1 results](#stage-1-results-2026-1030-to-1031). Arm A is the leading
+configuration. Arm C (prefix caching) was not run. Long-context work is **paused**: the
+leader lost power twice under sustained long prefills (I05 with DSpark, I06 without), and
+waits for Velvet's power and firmware check. DSpark is **off** in the default start and
+stays off until Stage 2.
 
-**Memory (2026-10-29):** the leader had 14.5 GiB free on the serving boot of 10-29, against
-about 20 GiB right after boot. Both ranks lost about 4 GiB after boot (optimisation log,
-2026-10-29 18:10). With DSpark's ~5 GiB that leaves about 9.5 GiB, below stop rule 3. So
-record memory after every step (`shape-warmup.py` writes `memory.json`; the ladder logs
-memory after every rung), and go past 64K only if the leader stays at 10 GiB or more.
+**Memory:** a DSpark start costs about 5.7 GB per node. With the default 8,192-token
+chunks, 1M does not fit within the memory rules, so the DSpark arms use 4,096-token chunks
+(`DSV4_MAX_BATCH=4096`). Record memory after every step (`shape-warmup.py` writes
+`memory.json`; the ladder logs memory after every rung).
 
 ## Contents
 
@@ -76,7 +76,9 @@ configuration.
 |---|---|---|---|
 | `DSV4_SPEC` | `off` | `on` | DSpark k=5, probabilistic draft sampling, adaptive verification off, CUDA-graph capture size 6. Requires `DSV4_DIAG=1` |
 | `DSV4_PATCH` | `1` | `m1` | GEMV patch variant. `m1` chunks only at M = 1; `1` also chunks at M = 2–8, which is slower ([patches.md](patches.md#chunked-compressor-gemv)) |
-| `DSV4_ASYNC` | `0` with DSpark | `0`, then `1` | `--async-scheduling`. Our image allows it with DSpark (`config/vllm.py`); untested here |
+| `DSV4_ASYNC` | `0` with DSpark | `0`, then `1` | `--async-scheduling`. Works with DSpark (arm B) but brings no gain on natural text, and it doubles the per-request KV reserve ([Stage 1 results](#stage-1-results-2026-1030-to-1031)) |
+| `DSV4_MAX_BATCH` | `8192` | `4096` | Prefill chunk size. 4,096 is needed for DSpark at 1M; it costs 6–11 % TTFT |
+| `DSV4_KV_CACHE_BYTES` | `11274289152` with 8,192 chunks, `9663676416` with 4,096 | `6979321856` (arm A) | KV pool per node. Arm A at 6.5 GiB holds 1,261,879 tokens (1.20× of 1M); arm B needs at least 7.25 GiB |
 | `DSV4_PREFIX_CACHE` | `1` | `0`, then `1` | Prefix caching. DSpark plus prefix caching had draft-window bugs upstream, so test it last |
 | `DSV4_DSPARK_LOADFIX` | `0` | `1` only if needed | Mounts `patches/dsv4-dspark.py`: the upstream #53984 guard for the #51916 `KeyError`, plus a warning that counts skipped draft expert params |
 
@@ -192,6 +194,59 @@ outputs should match except at near-tied tokens, as in the GEMV check:
 the case that broke DSpark upstream.
 
 **8. Return to the default configuration** ([Rollback](#rollback)), unless Stage 2 starts.
+
+## Stage 1 results (2026-10-30 to 10-31)
+
+All numbers are [measured] and checked against the raw files in `data/DSPARK/`; the
+optimisation log has the full entries. DSpark k=5, probabilistic draft sampling, GEMV patch
+`m1`, prefix caching off, 4,096-token chunks.
+
+**Arm A (async off, KV 6.5 GiB):**
+
+```bash
+DSV4_SPEC=on DSV4_PATCH=m1 DSV4_ASYNC=0 DSV4_PREFIX_CACHE=0 DSV4_MAX_BATCH=4096 DSV4_KV_CACHE_BYTES=6979321856 /srv/dsv4/run/start-dsv4-default.sh
+```
+
+- **Accuracy:** 41/52 correct, the same as DSpark off. 49/54 outputs identical to the
+  reference, with the first divergences at near-tied tokens. NCCL ranks agree on every rung.
+  Draft acceptance 0.432, 3.16 tokens per step.
+- **Decode on natural prompts** (`tools/natbench.py`, 512 tokens), against DSpark off on
+  the same prompts (27.0–27.3 tok/s for every prompt):
+
+  | Prompt | Temp 0 | Gain | Temp 0.6 | Gain |
+  |---|---|---|---|---|
+  | TCP explanation | 46.98 | +73 % | 35.63 | +31 % |
+  | Python code | 50.59 | +86 % | 49.32 | +82 % |
+  | Story | 29.82 | +10 % | 29.52 | +9 % |
+
+  The gain depends on how predictable the text is: large on code and technical text, small
+  on free-form stories.
+- **Long context:** 64K, 256K and 1M (1,036,267 tokens) all found the hidden code. 1M TTFT
+  872.2 s, against 813.7–820.3 s for the default, because of the 4,096-token chunks. After
+  the 1M rung the leader's MemAvailable reached 9 GiB, which broke stop rule 3 (10 GiB).
+- **Not established:** the decode gain at long context. Those rungs generate only about 50
+  tokens, and the earlier comparison used a different client. `E12B_LONG=1` (512-token
+  answers) now exists to measure it.
+- **The 4K rung's acceptance stop is not meaningful.** Its random-word prompt gives low
+  acceptance by design. The ladder now judges acceptance only with at least 500 draft tokens
+  and not on `4k`.
+
+**Arm B (async on, KV 7.25 GiB = 7784628224 bytes, 1,093,193 tokens):** the same accuracy
+and acceptance as arm A, and no faster on natural text (temp 0: 43.87 / 49.73 / 29.37 tok/s).
+The 256K rung ended in the leader power loss I05. At 6.5 GiB, arm B does not start at all:
+vLLM needs 6.95 GiB for one 1M request.
+
+**Why async needs more KV (C3, from the vLLM source):** with async scheduling vLLM keeps two
+batches in flight, and DSV4's sliding-window caches reserve room for every in-flight
+token. The KV needed for one 1M request is 3.85 GiB + 1.55 GiB per 4,096 tokens in flight.
+This matches all four measured configurations: 5.40 GiB (async off, 4,096 chunks), 6.95 GiB
+(async on, 4,096), 10.06 GiB (the default: async on, 8,192). DSpark itself adds nothing.
+
+**Against the Stage 2 criteria:** accuracy is met. The 1.2× decode gain is met on natural
+technical text and code, but not on stories, and not on the `4k` rung's random-word prompt
+it was defined on. That rung has to be redefined before the criterion can be judged. "Every
+rung to 1M with no stop" is not met (stop rule 3 at 1M). The long-context decode gain and
+the 24 h soak are not yet measured.
 
 ## Stop rules
 

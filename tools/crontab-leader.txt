@@ -1,0 +1,3 @@
+# Leader user crontab (log 2026-11-01): thermal log and peer host watch start at every boot.
+@reboot cd /srv/dsv4/run && setsid bash tools/thermlog.sh >/dev/null 2>>/srv/dsv4/run/data/thermal/thermlog.err
+@reboot setsid bash /srv/dsv4/run/tools/hostwatch.sh gx10 192.168.200.11 192.168.201.11 >/dev/null 2>&1
