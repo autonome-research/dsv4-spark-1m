@@ -11,7 +11,8 @@ are in [Stage 1 results](#stage-1-results-2026-1030-to-1031). Arm A is the leadi
 configuration. Arm C (prefix caching) was not run. Long-context work is **paused**: the
 leader lost power twice under sustained long prefills (I05 with DSpark, I06 without), and
 waits for Velvet's power and firmware check. DSpark is **off** in the default start and
-stays off until Stage 2.
+stays off until Stage 2. Since 2026-11-01 the leading configuration is arm A plus
+`DSV4_CG_SIZES=1,2,3,4,5,6` ([CUDA graphs for DSpark](#cuda-graphs-for-dspark-2026-1101)).
 
 **Memory:** a DSpark start costs about 5.7 GB per node. With the default 8,192-token
 chunks, 1M does not fit within the memory rules, so the DSpark arms use 4,096-token chunks
@@ -25,6 +26,7 @@ chunks, 1M does not fit within the memory rules, so the DSpark arms use 4,096-to
 - [Switches](#switches)
 - [Stage 0: offline checks](#stage-0-offline-checks)
 - [Stage 1: serving test](#stage-1-serving-test)
+- [CUDA graphs for DSpark (2026-11-01)](#cuda-graphs-for-dspark-2026-1101)
 - [Stop rules](#stop-rules)
 - [Rollback](#rollback)
 - [Stage 2: adoption](#stage-2-adoption)
@@ -79,6 +81,7 @@ configuration.
 | `DSV4_ASYNC` | `0` with DSpark | `0`, then `1` | `--async-scheduling`. Works with DSpark (arm B) but brings no gain on natural text, and it doubles the per-request KV reserve ([Stage 1 results](#stage-1-results-2026-1030-to-1031)) |
 | `DSV4_MAX_BATCH` | `8192` | `4096` | Prefill chunk size. 4,096 is needed for DSpark at 1M; it costs 6–11 % TTFT |
 | `DSV4_KV_CACHE_BYTES` | `11274289152` with 8,192 chunks, `9663676416` with 4,096 | `6979321856` (arm A) | KV pool per node. Arm A at 6.5 GiB holds 1,261,879 tokens (1.20× of 1M); arm B needs at least 7.25 GiB |
+| `DSV4_CG_SIZES` | unset (vLLM's list, truncated to [1, 2, 4]) | `1,2,3,4,5,6` | `--cudagraph-capture-sizes`. Without it the 6-token verify and the draft run eager; with it the step is about 7 % shorter and steady. The largest size must equal the capture size. Costs +0.9 GiB graph memory per node ([CUDA graphs](#cuda-graphs-for-dspark-2026-1101)) |
 | `DSV4_PREFIX_CACHE` | `1` | `0`, then `1` | Prefix caching. DSpark plus prefix caching had draft-window bugs upstream, so test it last |
 | `DSV4_DSPARK_LOADFIX` | `0` | `1` only if needed | Mounts `patches/dsv4-dspark.py`: the upstream #53984 guard for the #51916 `KeyError`, plus a warning that counts skipped draft expert params |
 
@@ -247,6 +250,32 @@ technical text and code, but not on stories, and not on the `4k` rung's random-w
 it was defined on. That rung has to be redefined before the criterion can be judged. "Every
 rung to 1M with no stop" is not met (stop rule 3 at 1M). The long-context decode gain and
 the 24 h soak are not yet measured.
+
+## CUDA graphs for DSpark (2026-11-01)
+
+**Finding (B1 profile):** with a capture size of 6, vLLM's default capture list is
+[1, 2, 4] (log: "Truncating max_cudagraph_capture_size to 4"). The 6-token verify and the
+draft therefore never replayed a graph: about 2,060 kernel launches per step, with the hot
+CPU threads at 92–100 %. `DSV4_CG_SIZES=1,2,3,4,5,6` captures every size.
+
+**Measured, 24 requests per boot (`tools/specstep.py`, temp 0, 512 tokens; ms per DSpark step):**
+
+| Boot | Range | Median | Spread |
+|---|---|---|---|
+| Arm A, no graph sizes (2026-11-01 20:43–20:52) | 75.4–83.0 | 79.7 | ±5 %, drifts within the boot |
+| Arm A, `DSV4_CG_SIZES=1,2,3,4,5,6` (22:07–22:13) | 73.5–74.9 | 74.2 | 1.8 %, no drift |
+
+The graph boot's slowest request is faster than the eager boot's fastest. Step cost does not
+depend on the text, so at equal acceptance this is about +7 % decode; tok/s across boots
+still varies with acceptance, because greedy text can change between boots. Accuracy on the
+acc rung is unchanged (41/52; 50/54 outputs identical to the earlier arm A). Cost: graph
+memory 1.00 GiB instead of 0.09 GiB per node, and 2 new DeepGEMM kernels at warm-up.
+
+**Not pursued (B2):** adaptive verification is rejected by vLLM on GB10, because the
+DeepSeek indexer supports on-device query trimming only on capability 10.x and 9.x (GB10 is
+12.1). Fixed k = 3 or 4 loses 16–20 % tokens per step on technical text and code while the
+step barely shrinks; k > 5 drafts beyond the trained block of 5. Details in the log,
+2026-11-01 22:15.
 
 ## Stop rules
 

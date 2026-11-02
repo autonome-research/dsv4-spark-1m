@@ -56,6 +56,17 @@ fi
 # dspark uses k=5 draft tokens, so captured size must be max-seqs * (k+1).
 # Without speculative decoding, the ordinary capture size is max-num-seqs.
 if [[ "$SPEC_MODE" == on ]]; then MAXCG=$((MAXSEQS * 6)); else MAXCG="$MAXSEQS"; fi
+# DSV4_CG_SIZES (B1, log 2026-11-01): explicit CUDA-graph sizes, comma-separated, e.g.
+# 1,2,3,4,5,6. vLLM's default list for a capture size of 6 is [1,2,4], so the 6-token DSpark
+# verify step ran without CUDA graphs. Unset keeps vLLM's default list.
+CG_SIZES_ARGS=()
+if [[ -n "${DSV4_CG_SIZES:-}" ]]; then
+  [[ $DSV4_CG_SIZES =~ ^[1-9][0-9]*(,[1-9][0-9]*)*$ ]] || { echo "DSV4_CG_SIZES must be comma-separated integers (got: $DSV4_CG_SIZES)" >&2; exit 2; }
+  IFS=, read -ra CG_LIST <<<"$DSV4_CG_SIZES"
+  CG_MAX=$(printf '%s\n' "${CG_LIST[@]}" | sort -n | tail -1)
+  (( CG_MAX == MAXCG )) || { echo "DSV4_CG_SIZES: largest size ($CG_MAX) must equal the capture size $MAXCG" >&2; exit 2; }
+  CG_SIZES_ARGS=(--cudagraph-capture-sizes "${CG_LIST[@]}")
+fi
 
 case "$RANK" in
   0) NAME=dsv4-leader; ROLE=leader; EXTRA=() ;;
@@ -202,6 +213,9 @@ CACHE_ARGS=(--enable-prefix-caching)
 # Traces land in $DIAG_DIR/prof on each node. Optimisation log E07.
 PROFILE_ARGS=()
 [[ "${DSV4_PROFILE:-0}" == 1 ]] && PROFILE_ARGS=(--profiler-config '{"profiler":"torch","torch_profiler_dir":"/tmp/vllm-debug/prof","torch_profiler_with_stack":false,"ignore_frontend":true,"delay_iterations":10,"max_iterations":20}')
+# With profiling on, also enable vLLM's step scopes (preprocess/forward/sample/draft) so a
+# trace separates the DSpark draft from the verify forward (B1, log 2026-11-01).
+[[ "${DSV4_PROFILE:-0}" == 1 ]] && ENVS+=(--env VLLM_CUSTOM_SCOPES_FOR_PROFILING=1)
 # Async scheduling (optimisation log E07.6, D7): default ON when DSpark is off
 # (tested: 4K/64K/1M + idle probes), default OFF when DSpark is on (untested with
 # DSpark; it was disabled while debugging the DSpark rank-divergence deadlock).
@@ -311,7 +325,7 @@ esac
 # Settings that must be identical on both ranks, or they run different collectives and
 # NCCL hangs. launch-dsv4.sh compares this line between the nodes and aborts on a mismatch.
 md5_of() { if [[ -n $1 ]]; then md5sum "${1%%:*}" | cut -c1-8; else echo none; fi; }
-echo "node-launch: decode spec=$SPEC_MODE async=$ASYNC prefix_cache=$PREFIX_CACHE" \
+echo "node-launch: decode spec=$SPEC_MODE async=$ASYNC prefix_cache=$PREFIX_CACHE cg_sizes=${DSV4_CG_SIZES:-default}" \
   "gemv=$(md5_of "${PATCH_ARGS[1]:-}") dspark_loader=$(md5_of "${DSPARK_ARGS[1]:-}")" >&2
 
 if [[ "$STACK" == upstream ]]; then
@@ -365,6 +379,7 @@ if ! timeout --kill-after=2 180 docker run -d --name "$NAME" --restart=no \
     "${BACKEND_ARGS[@]}" --block-size 256 \
     --max-model-len "$MAX_MODEL_LEN" --max-num-seqs "$MAXSEQS" --max-num-batched-tokens "$MAXBATCH" \
     --max-cudagraph-capture-size "$MAXCG" \
+    "${CG_SIZES_ARGS[@]}" \
     --gpu-memory-utilization "$GPU_MEMORY_UTILIZATION" --kv-cache-memory-bytes "$KV_CACHE_BYTES" \
     --tokenizer-mode deepseek_v4 \
     "${SPEC_ARGS[@]}" \
